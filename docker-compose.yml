@@ -1,0 +1,158 @@
+# ============================================================
+#  Hackeadora — Docker Compose
+#  Autores: Claude (Anthropic) & Antonio Fernandes
+#
+#  Uso:
+#    cp .env.example .env && nano .env
+#    docker compose up -d
+#    docker compose logs -f
+# ============================================================
+
+services:
+
+  # ── Dashboard web + Telegram webhook bot ──────────────────
+  web:
+    build: .
+    container_name: hackeadora-web
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      - hackeadora-data:/app/data
+      - hackeadora-output:/app/output
+    env_file: .env
+    environment:
+      - RECONFLOW_DB=/app/data/recon.db
+      - RECONFLOW_OUTPUT=/app/output
+    depends_on:
+      - caido
+    networks:
+      - hackeadora-net
+
+  # ── Blind XSS poller ─────────────────────────────────────────
+  blindxss-poller:
+    build: .
+    container_name: hackeadora-blindxss-poller
+    restart: unless-stopped
+    command: python3 /app/core/blindxss_callback.py --poll
+    volumes:
+      - hackeadora-data:/app/data
+    env_file: .env
+    networks:
+      - hackeadora-net
+
+  # ── KB Updater mensual ───────────────────────────────────────
+  kb-updater:
+    build: .
+    container_name: hackeadora-kb-updater
+    restart: "no"
+    command: >
+      bash -c "
+        while true; do
+          echo '[kb-updater] Esperando 30 días para próxima actualización...'
+          sleep 2592000
+          echo '[kb-updater] Actualizando Knowledge Base...'
+          python3 /app/core/kb_updater.py
+        done
+      "
+    volumes:
+      - hackeadora-data:/app/data
+    env_file: .env
+    networks:
+      - hackeadora-net
+
+  # ── Worker de confirmaciones Telegram ─────────────────────
+  worker:
+    build: .
+    container_name: hackeadora-worker
+    restart: unless-stopped
+    command: python3 /app/core/worker.py
+    volumes:
+      - hackeadora-data:/app/data
+      - hackeadora-output:/app/output
+    env_file: .env
+    environment:
+      - RECONFLOW_DB=/app/data/recon.db
+      - RECONFLOW_OUTPUT=/app/output
+    depends_on:
+      - web
+    networks:
+      - hackeadora-net
+
+  # ── Recon scheduler (loop cada 12h) ───────────────────────
+  recon:
+    build: .
+    container_name: hackeadora-recon
+    restart: unless-stopped
+    command: >
+      bash -c "
+        echo 'Esperando 10s para que el resto de servicios arranquen...' &&
+        sleep 10 &&
+        while true; do
+          if [ -f /app/data/targets.txt ]; then
+            while IFS= read -r DOMAIN; do
+              [ -z \"$$DOMAIN\" ] && continue
+              echo \"[recon] Lanzando scan: $$DOMAIN\"
+              /app/recon.sh $$DOMAIN
+            done < /app/data/targets.txt
+          else
+            echo '[recon] Sin targets. Añade dominios a /app/data/targets.txt'
+          fi
+          echo \"[recon] Próximo ciclo en ${SCHEDULE_HOURS:-12}h\"
+          sleep $$(( ${SCHEDULE_HOURS:-12} * 3600 ))
+        done
+      "
+    volumes:
+      - hackeadora-data:/app/data
+      - hackeadora-output:/app/output
+    env_file: .env
+    environment:
+      - RECONFLOW_DB=/app/data/recon.db
+      - RECONFLOW_OUTPUT=/app/output
+      - HTTP_PROXY=http://caido:8181
+      - HTTPS_PROXY=http://caido:8181
+    # masscan necesita NET_RAW + rotador necesita acceso red
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-eu-west-1}
+      - AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE:-t3.small}
+      - AWS_SPOT_MAX_PRICE=${AWS_SPOT_MAX_PRICE:-0.02}
+      - AWS_KEY_PAIR=${AWS_KEY_PAIR:-hackeadora}
+      - AWS_AMI_ID=${AWS_AMI_ID:-}
+      - ROTATION_INTERVAL=${ROTATION_INTERVAL:-500}
+    depends_on:
+      - caido
+      - web
+    networks:
+      - hackeadora-net
+
+  # ── Caido (proxy pasivo) ───────────────────────────────────
+  caido:
+    image: caido/caido:latest
+    container_name: hackeadora-caido
+    restart: unless-stopped
+    ports:
+      - "${CAIDO_PORT:-8181}:8181"       # proxy
+      - "${CAIDO_UI_PORT:-7070}:7070"    # UI web de Caido
+    volumes:
+      - caido-data:/home/caido/.caido
+    networks:
+      - hackeadora-net
+
+# ── Volúmenes ─────────────────────────────────────────────────
+volumes:
+  hackeadora-data:
+    driver: local
+  hackeadora-output:
+    driver: local
+  caido-data:
+    driver: local
+
+# ── Red interna ───────────────────────────────────────────────
+networks:
+  hackeadora-net:
+    driver: bridge
