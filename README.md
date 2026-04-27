@@ -1,332 +1,300 @@
-# 🕵️ Hackeadora
+# 🔍 Hackeadora
 
-> Pipeline automatizado y modular de bug hunting continuo.
-> 22 módulos, inteligencia de negocio, AI advisor y dashboard web completo.
+> Pipeline automatizado de Bug Bounty — 28 módulos de recon y detección de vulnerabilidades
 
 **Autores:** Claude (Anthropic) & Antonio Fernandes  
 **Licencia:** MIT
 
 ---
 
-## ¿Qué hace?
+## ¿Qué es Hackeadora?
 
-Hackeadora ejecuta un ciclo de reconocimiento completo sobre uno o varios dominios, con inteligencia creciente en cada fase:
+Hackeadora es un pipeline completo de bug bounty diseñado para ejecutarse de forma autónoma en una VPS, respetando el scope del programa y minimizando el ruido contra el objetivo. Combina herramientas del sector (nuclei, subfinder, katana, ghauri, dalfox...) con análisis de IA (Claude Haiku/Sonnet) y una Knowledge Base actualizable con técnicas de BlackHat, DEF CON y PortSwigger Top 10.
 
-### Fase 1 — Descubrimiento de superficie
-1. **Enumeración de subdominios** — subfinder, amass, bbot, assetfinder, findomain
-2. **Resolución DNS** — dnsx + httpx → alive/dead
-3. **Subdomain Takeover** — subzy + subjack → Telegram inmediato
-4. **Nuclei sobre subdominios nuevos**
-5. **Crawling** — katana, gau, waybackurls, gospider → por proxy Caido/Burp
-6. **Directory fuzzing** — ffuf por proxy → nuevas URLs a la rueda
-7. **Nuclei sobre URLs nuevas**
-8. **Screenshots** — gowitness
-9. **Tech detection** — whatweb
-10. **Tech fingerprinting** — Wappalyzer por URL con versiones (triaje CVE)
-
-### Fase 2 — Análisis profundo
-11. **JS Analyzer** — secrets (30+ patrones) + endpoints → rueda de scan
-12. **Login Finder** — DOM parsing, OAuth, SAML, SSO, API auth
-13. **Port Scan** — masscan sobre puertos web no estándar → httpx verify
-14. **Breach Lookup** — Dehashed API (solo primera vez, actualización manual)
-
-### Fase 3 — Superficie ampliada (Bloque A)
-15. **Param Discovery** — paramspider + arjun → parámetros ocultos
-16. **GitHub Dorking** — GitHub Search API + trufflehog sobre la org
-17. **Cloud Enum** — S3/Azure/GCP bucket enumeration con mutaciones
-18. **ASN Discovery** — asnmap + BGPView → rangos IP → masscan
-
-### Fase 4 — Autenticación y lógica
-19. **Auth Crawler** — credenciales del vault cifrado (AES-256-GCM) → crawling autenticado por Caido
-20. **Smart Scan** — guiado por Knowledge Base: SSRF, IDOR, Open Redirect, SSTI, CORS...
-21. **Business Logic** — inferencia de entidades (payment, coupon, role...) + tests automáticos
-22. **AI Advisor** — Claude Haiku/Sonnet al final del scan (opcional, requiere API key)
+```bash
+./recon.sh empresa.com
+```
 
 ---
 
-## 🐳 Docker (recomendado)
+## Arquitectura
+
+```
+hackeadora/
+├── recon.sh                # Pipeline principal (28 módulos)
+├── install.sh              # Instalador de herramientas
+├── quickstart.sh           # Docker quickstart
+├── docker-compose.yml
+├── Dockerfile
+├── config.env.example
+│
+├── core/                   # Infraestructura
+│   ├── db.sh               # SQLite helpers (20+ tablas)
+│   ├── logger.sh           # Logging por niveles
+│   ├── notify.sh           # Notificaciones Telegram
+│   ├── proxy.sh            # Integración Caido/Burp
+│   ├── watchdog.sh         # Supervisor anti-zombie
+│   ├── http_analyzer.sh    # Análisis inteligente 404/429/500
+│   ├── vault.py            # AES-256-GCM cifrado credenciales
+│   ├── rotator.sh          # IP rotation (AWS spot)
+│   ├── cloud_rotator.py    # Instancias AWS t3.small
+│   ├── acunetix.py         # Cliente API Acunetix
+│   ├── ai_advisor.py       # Claude Haiku/Sonnet
+│   ├── blindxss_callback.py# Receptor callbacks EZXSS
+│   ├── poc_generator.py    # Generador de PoC con evidencia real
+│   ├── kb_updater.py       # Actualización mensual KB
+│   └── knowledge_base.json # 33 vulnerabilidades documentadas
+│
+├── modules/                # 28 módulos del pipeline
+├── web/                    # Dashboard FastAPI + HTML
+├── mcp/                    # 5 MCP servers externos (Node.js)
+├── blindxss/               # Setup EZXSS self-hosted
+└── data/recon.db           # SQLite
+```
+
+---
+
+## Los 28 módulos
+
+### Fase 1 — Descubrimiento de superficie
+| Módulo | Herramientas | Notas |
+|--------|-------------|-------|
+| 01 Subdomain enum | subfinder, amass, bbot, assetfinder, findomain | |
+| 02 DNS resolve | dnsx, httpx | alive/dead + metadata |
+| 03 Takeover | subzy, subjack | alerta Telegram inmediata |
+| 17 Cloud assets | cloud_enum, checks directos | S3, Azure, GCP |
+| 18 ASN discovery | asnmap, BGPView API | CIDRs → masscan → httpx |
+
+### Fase 2 — Recon activo
+| Módulo | Herramientas | Notas |
+|--------|-------------|-------|
+| 04 Nuclei subs | nuclei | solo subdominios nuevos |
+| 05 Crawler | katana, gau, waybackurls, gospider | por proxy Caido/Burp |
+| 06 Active scan | ffuf | -replay-proxy, http_analyzer |
+| 07 Nuclei URLs | nuclei | URLs nuevas |
+| 08 Screenshots | gowitness | |
+| 09/10 Tech detect | whatweb, webanalyze (Wappalyzer), httpx | versiones exactas |
+| 11 JS analyzer | SecretFinder + regex propios | 30+ patrones de secrets |
+| 12 Login finder | curl + DOM parsing | OAuth, SAML, SSO |
+| 13 Port scan | masscan + httpx | NET_RAW cap |
+| 14 Breach lookup | Dehashed API | solo primera vez |
+| 15 Param discovery | paramspider + arjun | params jugosos |
+| 16 GitHub dorking | GitHub Search API + trufflehog | |
+| 19 Auth crawler | katana + gospider con cookies | vault AES-256-GCM |
+
+### Fase 3 — Detección de vulnerabilidades
+| Módulo | Herramientas | Notas |
+|--------|-------------|-------|
+| 20 Smart scan | KB + nuclei + ghauri + dalfox | SQLi, XSS, SSRF, SSTI... |
+| 21 Business logic | sqlite + curl | payment, coupon, role, upload |
+| 22 CORS check | curl | 9 técnicas |
+| 23 403 bypass | curl | path/header/method bypass |
+| 24 HTTP Smuggling | smuggler.py + nuclei | solo si CDN/proxy detectado |
+| 25 CMS scan | wpscan, joomscan, droopescan, aem-hacker, log4j-scan | tech-aware |
+| 26 Path confusion | curl + nuclei | Orange Tsai nginx/Apache/Tomcat/Spring |
+| 27 Blind XSS | EZXSS self-hosted | payload_id único por campo |
+| 28 Cache attacks | curl + nuclei | Web Cache Poisoning + WCD |
+
+---
+
+## Tech-awareness
+
+Cada módulo solo se activa si la tecnología correspondiente fue detectada por el módulo 10:
+
+| Técnica | Requiere detección previa |
+|---------|--------------------------|
+| WPScan | WordPress en tech fingerprinting |
+| joomscan | Joomla en tech fingerprinting |
+| aem-hacker | AEM/Adobe o URLs /crx/ crawleadas |
+| Log4Shell | Java/Tomcat/Spring en tech o URLs .jsp/.action |
+| React2Shell | Next.js/React en tech o URLs /_next/ crawleadas |
+| Nginx off-by-slash | Server: nginx en headers |
+| Apache Confusion | Server: Apache en headers |
+| Tomcat ..;/ | JSESSIONID/Tomcat en headers |
+| Cache attacks | X-Cache/CF-Cache-Status en respuestas |
+| HTTP Smuggling | CDN/proxy en tech fingerprinting |
+
+---
+
+## Knowledge Base — 33 vulnerabilidades
+
+Técnicas documentadas en conferencias de seguridad 2023-2025:
+
+**PortSwigger Top 10 2024:**
+- Apache Confusion Attacks — Orange Tsai, BlackHat 2024 (#1)
+- Web Cache Deception wildcard (#9)
+- Cookie Tossing → OAuth Hijack (#10)
+- SQL Injection at Protocol Level — DEF CON 32
+
+**PortSwigger Top 10 2025:**
+- SAML Void Canonicalization — CVE-2025-66568/66567
+- Funky Chunks HTTP Smuggling — DEF CON 33
+- Cross-Site WebSocket Hijacking
+- Parser Differentials (#10)
+
+**BlackHat 2024:**
+- GitHub Actions Self-Hosted Runner Takeover
+- React2Shell — CVE-2025-55182/66478
+
+**CVEs de servidor:**
+- Tomcat ..;/ — CVE-2025-24813
+- Tomcat RewriteValve — CVE-2025-55752
+- Spring Path Traversal — CVE-2024-38819
+- Apache CVE-2024-38475/38476/38477/39573
+
+La KB se actualiza automáticamente cada mes desde HackerOne Hacktivity API, PayloadsAllTheThings y nuclei-templates.
+
+---
+
+## PoC Generator
+
+Genera documentos HTML con evidencia real listos para HackerOne:
+
+```bash
+# Listar findings disponibles
+python3 core/poc_generator.py --domain empresa.com --list
+
+# Generar PoC para un finding
+python3 core/poc_generator.py --finding-id 42
+
+# Todas las PoCs de un dominio
+python3 core/poc_generator.py --domain empresa.com --all --severity high
+```
+
+Cada PoC incluye: request real capturado, response con evidencia, curl reproducible, pasos numerados, screenshot, impacto de negocio y referencias de conferencias.
+
+---
+
+## Integraciones externas
+
+**Acunetix** — DAST comercial bajo demanda, limpia scan y target automáticamente.
+
+**IP Rotation AWS** — módulos ruidosos (ghauri, dalfox, React2Shell) usan IP nueva por ejecución.
+
+**EZXSS** — Blind XSS self-hosted con payload_id único por campo para identificar exactamente de dónde viene cada callback.
+
+---
+
+## MCP Servers
+
+5 servidores MCP externos en la VPS, accesibles desde Claude Code:
+
+| Server | Puerto | Función |
+|--------|--------|---------|
+| filesystem | 3001 | Lee outputs de Hackeadora |
+| github | 3002 | Repos públicos, commits, secrets |
+| playwright | 3003 | Navegador real, login autenticado |
+| telegram | 3004 | Notificaciones ricas |
+| nvd | 3005 | CVEs por tecnología y versión |
+
+```bash
+sudo bash mcp/install.sh
+bash mcp/status.sh
+claude --mcp-config core/mcp_config.json
+```
+
+---
+
+## Instalación
+
+### Docker (recomendado)
 
 ```bash
 git clone https://github.com/afernandesvigo/hackeadora.git
 cd hackeadora
-cp .env.example .env
-nano .env                    # tokens Telegram, Dehashed, GitHub, Anthropic
-mkdir -p data
-echo "ejemplo.com" > data/targets.txt
-chmod +x quickstart.sh && ./quickstart.sh
-```
-
-| Contenedor | Función | Puerto |
-|---|---|---|
-| hackeadora-web | Dashboard + Telegram webhook | 8080 |
-| hackeadora-worker | Procesa confirmaciones Telegram | — |
-| hackeadora-recon | Loop de recon cada N horas | — |
-| hackeadora-caido | Proxy pasivo | 8181 / UI:7070 |
-| hackeadora-kb-updater | Actualización mensual de KB | — |
-
----
-
-## Instalación manual (sin Docker)
-
-```bash
 cp config.env.example config.env
-nano config.env
-sudo ./install.sh
-./recon.sh --test-telegram
+# Editar config.env con tus tokens
+docker compose up -d
 ```
 
----
-
-## Estructura
-
-```
-hackeadora/
-├── Dockerfile / docker-compose.yml / quickstart.sh
-├── install.sh / recon.sh / config.env.example / .env.example
-│
-├── core/
-│   ├── db.sh              # SQLite: 15+ tablas
-│   ├── logger.sh          # Logging centralizado
-│   ├── notify.sh          # Telegram tipado
-│   ├── proxy.sh           # Caido/Burp helper
-│   ├── vault.py           # AES-256-GCM cifrado de credenciales
-│   ├── knowledge_base.json # 15 tipos de vuln con payloads y patrones
-│   ├── kb_updater.py      # Actualizador mensual automático de KB
-│   └── ai_advisor.py      # Claude Haiku/Sonnet para análisis y chains
-│
-├── modules/
-│   ├── 01_subdomain_enum.sh
-│   ├── 02_dns_resolve.sh
-│   ├── 03_takeover.sh
-│   ├── 04_nuclei_scan.sh
-│   ├── 05_crawler.sh         # con proxy Caido/Burp
-│   ├── 06_active_scan.sh     # ffuf con -replay-proxy
-│   ├── 07_nuclei_urls.sh
-│   ├── 08_screenshots.sh
-│   ├── 09_tech_detect.sh
-│   ├── 10_tech_fingerprint.sh
-│   ├── 11_js_analyzer.sh
-│   ├── 12_login_finder.sh
-│   ├── 13_port_scan.sh
-│   ├── 14_breach_lookup.sh
-│   ├── 15_param_discovery.sh
-│   ├── 16_github_dorking.sh
-│   ├── 17_cloud_enum.sh
-│   ├── 18_asn_discovery.sh
-│   ├── 19_auth_crawler.sh
-│   ├── 20_smart_scan.sh
-│   ├── 21_business_logic.sh
-│   └── TEMPLATE.sh
-│
-└── web/
-    ├── app.py             # FastAPI — 25+ endpoints
-    ├── start.sh
-    └── static/index.html  # Dashboard single-file
-```
-
----
-
-## Base de datos (SQLite)
-
-| Tabla | Contenido |
-|---|---|
-| domains | Dominios monitorizados |
-| subdomains | Subdominios con IP, status, tech |
-| urls | URLs con fuente y estado nuclei |
-| findings | Vulnerabilidades con severidad |
-| technologies | Tech + versión por URL (triaje CVE) |
-| js_files | JS analizados con SHA256 |
-| js_secrets | Secrets encontrados (enmascarados) |
-| js_endpoints | Endpoints extraídos de JS |
-| login_forms | Login forms con tipo (form/OAuth/SAML/SSO) |
-| port_findings | Servicios web en puertos no estándar |
-| breach_findings | Emails en filtraciones (Dehashed) |
-| url_params | Parámetros descubiertos por URL |
-| github_findings | Secrets/endpoints en repos públicos |
-| cloud_assets | Buckets S3/Azure/GCP |
-| asn_ranges | Rangos IP por ASN |
-| auth_credentials | Credenciales cifradas AES-256-GCM |
-| business_entities | Entidades de negocio inferidas |
-| business_tests | Tests de lógica ejecutados |
-| ai_suggestions | Sugerencias del AI Advisor |
-| confirm_queue | Confirmaciones pendientes Telegram |
-| scan_history | Historial de fases por dominio |
-
----
-
-## Dashboard web
+### VPS nativa
 
 ```bash
-./web/start.sh   # http://localhost:8080
+sudo bash install.sh
+cp config.env.example config.env
+source config.env
+./recon.sh empresa.com
 ```
-
-### Vistas globales (sidebar)
-- **Overview** — stats de todos los dominios
-- **All Findings** — vulnerabilidades por severidad
-- **🔬 Technologies** — fingerprinting + buscador CVE (tech+versión → URLs afectadas)
-- **🔑 JS Secrets** — secrets por tipo y dominio
-- **🔐 Login Forms** — formularios de auth detectados
-- **⚠️ Breaches** — emails en filtraciones
-- **🎯 Parámetros** — params ocultos descubiertos
-- **🐙 GitHub** — findings en repos públicos
-- **☁️ Cloud Assets** — buckets abiertos/protegidos
-- **🗺️ ASN/IP Ranges** — superficie más allá del DNS
-- **🔒 Vault** — gestión de credenciales cifradas
-- **🧠 Knowledge Base** — 15 tipos de vuln con patrones + botón de actualización
-- **🤖 AI Advisor** — sugerencias IA priorizadas + coste estimado
-
-### Vistas por dominio (pestañas)
-Subdominios · URLs · Findings · Timeline · Screenshots · 🔬 Tech · 🔑 JS · 🔐 Logins · 🔌 Ports · ⚠️ Breaches · 🔒 Vault · 🏢 Business · 🤖 AI
 
 ---
 
-## Knowledge Base + Auto-actualización
-
-La KB (`core/knowledge_base.json`) contiene 15 tipos de vulnerabilidades con:
-- Frecuencia en HackerOne y bounty promedio
-- Parámetros y rutas que las triggean
-- Payloads reales de PayloadsAllTheThings
-- Tags de nuclei asociados
-
-Se actualiza automáticamente cada mes desde:
-- HackerOne Hacktivity API (reportes divulgados)
-- GitHub commits de PayloadsAllTheThings y HowToHunt
-- Nuclei templates nuevos
+## Configuración mínima
 
 ```bash
-python3 core/kb_updater.py           # actualización normal
-python3 core/kb_updater.py --force   # forzar aunque sea reciente
-python3 core/kb_updater.py --dry-run # ver cambios sin guardar
+# config.env
+TELEGRAM_BOT_TOKEN=tu_token
+TELEGRAM_CHAT_ID=tu_chat_id
+
+# Opcional pero recomendado
+ANTHROPIC_API_KEY=        # AI Advisor (Claude Haiku/Sonnet)
+GITHUB_TOKEN=             # GitHub dorking + módulo 16
+DEHASHED_EMAIL=           # Breach lookup
+DEHASHED_API_KEY=
+ACUNETIX_URL=https://localhost:3443
+ACUNETIX_API_KEY=
+AWS_ACCESS_KEY_ID=        # IP rotation
+AWS_SECRET_ACCESS_KEY=
+EZXSS_URL=                # Blind XSS callbacks
+WPSCAN_API_TOKEN=         # 25 req/día gratis
+NVD_API_KEY=              # CVE lookup (opcional)
 ```
-
----
-
-## AI Advisor (opcional)
-
-Requiere `ANTHROPIC_API_KEY` en `.env`. Sin ella, el pipeline funciona igual.
-
-```bash
-# Análisis de oportunidades (Haiku, ~$0.001-0.005)
-python3 core/ai_advisor.py --domain empresa.com
-
-# + Chains de vulnerabilidades (Sonnet, ~$0.05-0.10)
-python3 core/ai_advisor.py --domain empresa.com --run-chains
-
-# Borrador reporte H1 (Sonnet, ~$0.05-0.15)
-python3 core/ai_advisor.py --domain empresa.com --report <finding_id>
-```
-
-El advisor se ejecuta automáticamente al final de cada scan y genera:
-- Dónde la IA aporta más profundidad que las herramientas automáticas
-- Cadenas de vulnerabilidades combinando findings existentes
-- Borradores de reportes H1 listos para enviar
-
----
-
-## Proxy (Caido / Burp)
-
-Todo el tráfico activo (katana, gospider, ffuf) pasa por el proxy:
-
-```env
-PROXY_TOOL=caido    # caido | burp | none
-PROXY_HOST=caido    # hostname Docker (misma VPS)
-PROXY_PORT=8181     # Caido:8181 / Burp:8080
-```
-
----
-
-## Vault de credenciales
-
-Credenciales de prueba cifradas con AES-256-GCM. Nunca en claro en la DB.
-
-```bash
-# Generar VAULT_KEY segura
-openssl rand -base64 32
-```
-
-Gestión desde el dashboard → 🔒 Vault o por dominio → pestaña Vault.
-Al encontrar un login form sin credenciales → Telegram notifica para añadirlas.
 
 ---
 
 ## Uso
 
 ```bash
-./recon.sh empresa.com              # scan único
-./recon.sh empresa.com --schedule   # loop cada 12h
-./recon.sh empresa.com --modules=01,02,15  # módulos específicos
-./recon.sh --test-telegram          # probar Telegram
-./recon.sh --stats empresa.com      # ver stats DB
+./recon.sh empresa.com                           # scan completo
+./recon.sh empresa.com --target app.empresa.com  # single target
+./recon.sh empresa.com --modules=20,22,23,24     # módulos específicos
+./recon.sh empresa.com --schedule                # loop cada 12h
+./recon.sh empresa.com --force-breach            # forzar Dehashed
+./recon.sh --test-telegram
+./recon.sh --stats empresa.com
 ```
 
 ---
 
-## Añadir un módulo nuevo
+## Watchdog
+
+Supervisor de procesos anti-zombie:
+- Timeout por módulo (10-30 min según el módulo)
+- Monitor de CPU/memoria por proceso
+- Limpieza de instancias AWS abiertas al salir
+- El pipeline continúa aunque un módulo falle
 
 ```bash
-cp modules/TEMPLATE.sh modules/22_mi_modulo.sh
-# implementar module_run()
-# en recon.sh añadir:
-run_module "22_mi_modulo"
+WATCHDOG_ENABLED=true
+MAX_CPU_PERCENT=90
+MAX_MEM_MB=2048
 ```
 
 ---
 
-## Variables de entorno (.env)
+## Filosofía
 
-```env
-# Obligatorias
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-
-# Recomendadas
-GITHUB_TOKEN=...           # dorking + trufflehog sin rate limit
-VAULT_KEY=...              # cifrado de credenciales (openssl rand -base64 32)
-
-# Opcionales
-ANTHROPIC_API_KEY=...      # AI Advisor (~$0.01-0.15 por dominio)
-DEHASHED_EMAIL=...         # breach lookup
-DEHASHED_API_KEY=...
-SSRF_CALLBACK=...          # interactsh o servidor propio
-MASSCAN_RATE=1000          # paquetes/seg para port scan
-```
+- **Tech-aware** — cada herramienta solo corre si la tecnología está presente
+- **Respetuoso** — rate limiting, Retry-After, no reintentar 404s
+- **Limpio** — Acunetix borra scan y target tras recoger los datos
+- **Trazable** — todo el tráfico pasa por Caido/Burp
+- **Seguro** — credenciales cifradas AES-256-GCM, nunca en claro en DB
 
 ---
 
-## Herramientas instaladas
+## Requisitos
 
-| Categoría | Herramientas |
-|---|---|
-| Subdominios | subfinder, amass, bbot, assetfinder, findomain |
-| DNS / HTTP | dnsx, httpx |
-| Takeover | subzy, subjack |
-| Vuln scan | nuclei + templates + ghauri (SQLi) + dalfox (XSS) |
-| Crawling | katana, gau, waybackurls, gospider, hakrawler |
-| Fuzzing | ffuf |
-| Screenshots | gowitness |
-| Tech | whatweb, webanalyze (Wappalyzer) |
-| JS | SecretFinder + patrones PCRE propios |
-| Params | paramspider, arjun |
-| Recon ASN | asnmap, mapcidr |
-| Secrets | trufflehog |
-| Cloud | cloud_enum |
-| Port scan | masscan |
-| Utilidades | anew, qsreplace, unfurl, jq, sqlite3 |
-| Web API | fastapi, uvicorn, cryptography |
+- Ubuntu 22.04+ / Debian 12+
+- Docker + Docker Compose
+- 2GB RAM mínimo, 4GB recomendado
+- Node.js 18+ (MCPs externos)
+- Python 3.10+
 
 ---
 
-## Roadmap
+## Licencia
 
-- [ ] Worker Telegram — botones inline para confirmar scans activos
-- [ ] Módulo 22 — CORS checker dedicado
-- [ ] Módulo 23 — 403 bypass automatizado
-- [ ] Módulo 24 — HTTP Request Smuggling
-- [ ] Módulo 25 — GraphQL introspection + IDOR
-- [ ] Exportar findings a PDF / CSV
-- [ ] Autenticación en el dashboard
-- [ ] Modo multi-tenant (varios hunters)
+MIT — para bug bounty y pentesting autorizado únicamente.
 
 ---
 
-*Hecho con 🖤 por Claude & Antonio Fernandes*
+*Claude (Anthropic) & Antonio Fernandes*
