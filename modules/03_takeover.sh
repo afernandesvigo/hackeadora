@@ -96,6 +96,7 @@ module_run() {
     if [[ -s "$SUBJACK_OUT" ]]; then
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
+        [[ "$LINE" == *"Not Vulnerable"* ]] && continue
         local SUB
         SUB=$(echo "$LINE" | awk '{print $1}')
         log_warn "⚠ TAKEOVER (subjack): $LINE"
