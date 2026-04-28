@@ -181,10 +181,9 @@ _run_pipeline() {
     notify_scan_start "${DOM} → ${TARGET_SUB}"
 
     # Solo módulos de análisis — no descubrimiento
-    run_module "04_nuclei_scan"
+    # Primero crawl + recon, nuclei al final con más contexto
     run_module "05_crawler"
     run_module "06_active_scan"
-    run_module "07_nuclei_urls"
     run_module "08_screenshots"
     run_module "09_tech_detect"
     run_module "10_tech_fingerprint"
@@ -198,19 +197,22 @@ _run_pipeline() {
     run_module "22_cors_check"
     run_module "23_403_bypass"
     run_module "24_http_smuggling"
+    run_module "04_nuclei_scan"
+    run_module "07_nuclei_urls"
 
   else
-    # ── MODO COMPLETO (comportamiento original) ─────────────
+    # ── MODO COMPLETO ───────────────────────────────────────
     log_phase "Hackeadora — Scan completo: $DOM"
     notify_scan_start "$DOM"
 
+    # Descubrimiento
     run_module "01_subdomain_enum"
     run_module "02_dns_resolve"
     run_module "03_takeover"
-    run_module "04_nuclei_scan"
+
+    # Crawl + recon (alimentan a nuclei)
     run_module "05_crawler"
     run_module "06_active_scan"
-    run_module "07_nuclei_urls"
     run_module "08_screenshots"
     run_module "09_tech_detect"
     run_module "10_tech_fingerprint"
@@ -228,6 +230,10 @@ _run_pipeline() {
     run_module "22_cors_check"
     run_module "23_403_bypass"
     run_module "24_http_smuggling"
+
+    # Nuclei al final — con todos los subdominios y URLs ya descubiertos
+    run_module "04_nuclei_scan"
+    run_module "07_nuclei_urls"
   fi
 
   # ── AI Advisor al final (siempre, si está configurado) ─────
