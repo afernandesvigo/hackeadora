@@ -34,36 +34,37 @@ module_run() {
   COUNT=$(wc -l < "$ALIVE" | tr -d ' ')
   log_info "Analizando tecnologías en $COUNT subdominios..."
 
-  local TMP_OUT="$OUT_DIR/.whatweb_raw.txt"
+  local TMP_OUT="$OUT_DIR/.whatweb_raw.json"
+  > "$TMP_OUT"
 
-  # Aggression 1 = pasivo (no intrusivo)
+  # Aggression 1 = pasivo (no intrusivo). Prueba HTTPS; fallback a HTTP.
   while IFS= read -r SUB; do
     [[ -z "$SUB" ]] && continue
-    whatweb \
-      --aggression 1 \
-      --quiet \
-      --log-json=/dev/stdout \
-      "https://${SUB}" \
-      2>/dev/null \
-    >> "$TMP_OUT" || true
+    local URL="https://${SUB}"
+    local WW_OUT
+    WW_OUT=$(whatweb --aggression 1 --quiet --log-json=/dev/stdout "$URL" 2>/dev/null)
+    # Si HTTPS devuelve array vacío, intentar HTTP
+    if [[ "$WW_OUT" == "["* ]] && echo "$WW_OUT" | jq -e '. == []' &>/dev/null; then
+      WW_OUT=$(whatweb --aggression 1 --quiet --log-json=/dev/stdout "http://${SUB}" 2>/dev/null) || true
+    fi
+    # Aplanar el array (una línea por objeto) y añadir al fichero temporal
+    echo "$WW_OUT" | jq -c '.[]' 2>/dev/null >> "$TMP_OUT" || true
   done < "$ALIVE"
 
-  # Parsear y guardar en DB
+  # Parsear y guardar en DB (ya una línea = un JSON object)
   if [[ -s "$TMP_OUT" ]] && command -v jq &>/dev/null; then
     while IFS= read -r LINE; do
       local TARGET PLUGINS TECH_JSON
-      TARGET=$(echo "$LINE" | jq -r '.target // ""' | sed 's|https\?://||;s|/.*||')
+      TARGET=$(echo "$LINE" | jq -r '.target // ""' 2>/dev/null | sed 's|https\?://||;s|/.*||') || continue
       [[ -z "$TARGET" ]] && continue
 
-      # Extraer plugins detectados como array de strings
       PLUGINS=$(echo "$LINE" | jq -r '[.plugins | keys[]] | join(", ")' 2>/dev/null || echo "")
       TECH_JSON=$(echo "$LINE" | jq -c '.plugins | keys' 2>/dev/null || echo "[]")
 
       if [[ -n "$PLUGINS" ]]; then
         log_info "$TARGET → $PLUGINS"
-        # Guardar en DB
         sqlite3 "$DB_PATH" \
-          "UPDATE subdomains SET tech='${TECH_JSON//\'/\'\'}' 
+          "UPDATE subdomains SET tech='${TECH_JSON//\'/\'\'}'
            WHERE domain_id=${DOMAIN_ID} AND subdomain='${TARGET}';" 2>/dev/null || true
       fi
 

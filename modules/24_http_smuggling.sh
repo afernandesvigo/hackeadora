@@ -95,7 +95,7 @@ _run_smuggler() {
   local SMUGGLER_OUT="$OUT_DIR/.smuggler_${HOST//[^a-zA-Z0-9]/_}.txt"
 
   # Rotador de IPs para smuggling (muy ruidoso)
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
 
   local SMUGGLER_CMD="python3 ${SMUGGLER} -u ${URL} --quiet 2>/dev/null"
 
@@ -202,7 +202,7 @@ module_run() {
 
   log_phase "Módulo 24 — $MODULE_DESC: $DOMAIN"
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

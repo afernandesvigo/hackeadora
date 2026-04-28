@@ -113,7 +113,7 @@ module_run() {
   log_info "$IP_COUNT IPs únicas para escanear"
 
   # ── Rotador de IPs (opcional) ──────────────────────────────
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
   if rotator_enabled && [[ "$IP_COUNT" -gt 50 ]]; then
     log_info "Rotador activo para masscan — scan distribuido en múltiples IPs"
   fi
@@ -210,7 +210,7 @@ PYEOF
   local HTTPX_OUT="$OUT_DIR/.httpx_ports_result.json"
 
   # Cargar proxy si está activo
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local HTTPX_PROXY=""
   $PROXY_ACTIVE && HTTPX_PROXY="-http-proxy ${PROXY_URL}"

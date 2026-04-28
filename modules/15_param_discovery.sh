@@ -28,7 +28,7 @@ module_run() {
   > "$PARAMS_OUT"
 
   # Proxy
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
 
   local TOTAL_PARAMS=0

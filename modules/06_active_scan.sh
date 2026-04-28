@@ -52,7 +52,7 @@ module_run() {
   fi
 
   # ── Proxy ────────────────────────────────────────────────
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local FFUF_PROXY_FLAG=""
   $PROXY_ACTIVE && FFUF_PROXY_FLAG="-replay-proxy ${PROXY_URL}" && \
@@ -67,7 +67,7 @@ module_run() {
   fi
 
   # ── Rotador de IPs (opcional) ──────────────────────────────
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
   if rotator_enabled; then
     log_info "Rotador activo — ffuf usará IPs rotadas cada ${ROTATOR_INTERVAL} peticiones"
   fi

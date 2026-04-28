@@ -552,7 +552,7 @@ module_run() {
 
   log_phase "Módulo 26 — $MODULE_DESC: $DOMAIN"
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

@@ -37,7 +37,7 @@ module_run() {
   log_info "Lanzando nuclei sobre $COUNT URLs..."
 
   # Rotador de IPs
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
 
   local NUCLEI_OUT="$OUT_DIR/nuclei_urls_$(date '+%Y%m%d_%H%M%S').json"
   local SEVERITY="${NUCLEI_SEVERITY:-medium,high,critical}"

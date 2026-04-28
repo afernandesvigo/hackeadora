@@ -37,8 +37,8 @@ module_run() {
   log_info "Lanzando nuclei sobre $COUNT subdominios..."
 
   # ── Rotador de IPs (opcional) ──────────────────────────────
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
-  if rotator_enabled && rotator_should_rotate; then
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
+  if type rotator_enabled &>/dev/null 2>&1 && rotator_enabled && rotator_should_rotate; then
     log_info "Rotando IP para nuclei scan..."
   fi
 

@@ -5,8 +5,8 @@
 # ============================================================
 
 # Niveles: DEBUG=0 INFO=1 WARN=2 ERROR=3
-declare -A _LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-_LOG_LEVEL_NUM="${_LOG_LEVELS[${LOG_LEVEL:-INFO}]}"
+declare -gA _LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+declare -g _LOG_LEVEL_NUM="${_LOG_LEVELS[${LOG_LEVEL:-INFO}]:-1}"
 
 # Colores
 _L_DEBUG='\033[0;35m'

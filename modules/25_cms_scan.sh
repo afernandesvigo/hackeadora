@@ -302,7 +302,7 @@ _scan_aem() {
     "/libs/granite/core/content/login.html"
   )
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -378,7 +378,7 @@ _scan_liferay() {
   SUBS=$(_get_subs_with_tech "$DOMAIN_ID" "%Liferay%")
   [[ -z "$SUBS" ]] && return
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -420,7 +420,7 @@ _scan_sap() {
   SUBS=$(_get_subs_with_tech "$DOMAIN_ID" "%SAP%")
   [[ -z "$SUBS" ]] && return
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -544,7 +544,7 @@ _scan_spring() {
        AND (tech_name LIKE '%Spring%' OR tech_name LIKE '%Java%');" 2>/dev/null)
   [[ -z "$SUBS" ]] && return
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -797,7 +797,7 @@ _scan_react2shell() {
     return
   fi
 
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
 
   # Crear archivo de targets
   local TARGETS="$OUT_DIR/.react2shell_targets.txt"

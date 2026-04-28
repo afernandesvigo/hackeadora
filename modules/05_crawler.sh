@@ -28,7 +28,7 @@ module_run() {
   fi
 
   # ── Cargar y verificar proxy ──────────────────────────────
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   $PROXY_ACTIVE && log_info "Tráfico de crawling enrutado por ${PROXY_TOOL}: ${PROXY_URL}"
 

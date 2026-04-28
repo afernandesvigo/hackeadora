@@ -69,8 +69,10 @@ _setup_scan() {
   source "$SCRIPT_DIR/core/logger.sh"
   source "$SCRIPT_DIR/core/notify.sh"
   source "$SCRIPT_DIR/core/db.sh"
+  source "$SCRIPT_DIR/core/proxy.sh"       2>/dev/null || true
   source "$SCRIPT_DIR/core/watchdog.sh"    2>/dev/null || true
   source "$SCRIPT_DIR/core/http_analyzer.sh" 2>/dev/null || true
+  source "$SCRIPT_DIR/core/rotator.sh"    2>/dev/null || true
 
   db_init
   db_add_domain "$DOM"
@@ -103,12 +105,17 @@ run_module() {
   MOD_TIMEOUT=$(_wd_get_timeout "$MOD_FILE" 2>/dev/null || echo 600)
 
   # Ejecutar con watchdog (timeout + resource monitor)
-  if type watchdog_run &>/dev/null 2>&1; then
-    watchdog_run "$MOD_FILE" "$MOD_TIMEOUT"       bash -c "source '$MOD_PATH' && module_run '$DOMAIN' '$DOMAIN_ID' '$OUT_DIR'"
+  # El watchdog con bash -c crea un subprocess que no hereda las funciones de bash.
+  # Cuando WATCHDOG_ENABLED=false, llamamos a module_run directamente en el shell actual.
+  if [[ "${WATCHDOG_ENABLED:-true}" == "true" ]] && type watchdog_run &>/dev/null 2>&1; then
+    watchdog_run "$MOD_FILE" "$MOD_TIMEOUT" \
+      bash -c "source '$MOD_PATH' && module_run '$DOMAIN' '$DOMAIN_ID' '$OUT_DIR'"
     local MOD_EXIT=$?
   else
+    set +e
     module_run "$DOMAIN" "$DOMAIN_ID" "$OUT_DIR"
     local MOD_EXIT=$?
+    set -e
   fi
 
   if [[ "$MOD_EXIT" -eq 0 ]]; then

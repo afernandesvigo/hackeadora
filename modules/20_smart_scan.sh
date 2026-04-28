@@ -20,7 +20,7 @@
 MODULE_NAME="smart_scan"
 MODULE_DESC="Smart Scan guiado por Knowledge Base"
 
-KB_PATH="$(dirname "$0")/../core/knowledge_base.json"
+KB_PATH="${SCRIPT_DIR}/core/knowledge_base.json"
 
 # ── Cargar KB ────────────────────────────────────────────────
 _kb_get_vuln() {
@@ -149,7 +149,7 @@ _test_idor() {
   fi
 
   # Obtener respuesta original para comparar
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -201,7 +201,7 @@ _test_open_redirect() {
     "https://evil.com%23.${DOMAIN}"
   )
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -236,7 +236,7 @@ _test_ssti() {
   local URL="$1" PARAM="$2" DOMAIN_ID="$3" DOMAIN="$4"
   log_info "  🔍 SSTI test: $URL?$PARAM"
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -275,7 +275,7 @@ _test_ssti() {
 _test_cors() {
   local URL="$1" DOMAIN_ID="$2" DOMAIN="$3"
 
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -351,11 +351,11 @@ module_run() {
   fi
 
   # Proxy
-  source "$(dirname "$0")/../core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
 
   # Rotador de IPs — ghauri/dalfox usan IP nueva por ejecución
-  source "$(dirname "$0")/../core/rotator.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
 
   local TOTAL_TESTS=0
   local TOTAL_FINDINGS=0

@@ -17,7 +17,7 @@
 # ============================================================
 
 # ── Timeouts por defecto (segundos) ──────────────────────────
-declare -A MODULE_TIMEOUTS=(
+declare -gA MODULE_TIMEOUTS=(
   [01_subdomain_enum]=600      # 10 min
   [02_dns_resolve]=300         # 5 min
   [03_takeover]=300            # 5 min
@@ -56,8 +56,8 @@ MAX_CPU_PERCENT="${MAX_CPU_PERCENT:-90}"   # % CPU máximo por proceso
 MAX_MEM_MB="${MAX_MEM_MB:-2048}"           # MB memoria máxima
 
 # ── Registro de PIDs activos ──────────────────────────────────
-declare -A ACTIVE_PIDS  # modulo → PID
-declare -A START_TIMES  # modulo → timestamp inicio
+declare -gA ACTIVE_PIDS  # modulo → PID
+declare -gA START_TIMES  # modulo → timestamp inicio
 
 # ── Logging del watchdog ──────────────────────────────────────
 _wd_log() {
@@ -67,7 +67,7 @@ _wd_log() {
   TS=$(date '+%Y-%m-%d %H:%M:%S')
   echo "[$TS] [WATCHDOG][$LEVEL] $MSG" >> "$WATCHDOG_LOG" 2>/dev/null || true
   [[ "$LEVEL" == "WARN" || "$LEVEL" == "ERROR" ]] && \
-    echo -e "\033[1;33m[WD:$LEVEL]\033[0m $MSG"
+    echo -e "\033[1;33m[WD:$LEVEL]\033[0m $MSG" || true
 }
 
 # ── Obtener timeout para un módulo ───────────────────────────
@@ -251,8 +251,8 @@ watchdog_cleanup() {
   done
 
   # Limpiar instancias AWS si el rotador está activo
-  if [[ -f "$BASE_DIR/core/cloud_rotator.py" ]] && command -v python3 &>/dev/null; then
-    python3 "$BASE_DIR/core/cloud_rotator.py" --cleanup 2>/dev/null || true
+  if [[ -f "${SCRIPT_DIR:-}/core/cloud_rotator.py" ]] && command -v python3 &>/dev/null; then
+    python3 "${SCRIPT_DIR:-}/core/cloud_rotator.py" --cleanup 2>/dev/null || true
   fi
 
   rm -f "$WATCHDOG_PID_FILE"

@@ -13,8 +13,8 @@
 
 # ── Tabla de URLs ignoradas ───────────────────────────────────
 # Se inicializa al hacer source
-declare -A HTTP_DEAD_URLS     # url → 1 (404 confirmado)
-declare -A HTTP_ERROR_URLS    # url → código de error
+declare -gA HTTP_DEAD_URLS     # url → 1 (404 confirmado)
+declare -gA HTTP_ERROR_URLS    # url → código de error
 HTTP_RATE_LIMIT_UNTIL=0       # timestamp hasta el que hay que esperar
 
 # ── Patrones en body de 500 que indican info útil ─────────────
