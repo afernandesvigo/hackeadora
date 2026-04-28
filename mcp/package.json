@@ -1,0 +1,22 @@
+{
+  "name": "hackeadora-mcp-servers",
+  "version": "1.0.0",
+  "description": "MCP servers for Hackeadora — Claude (Anthropic) & Antonio Fernandes",
+  "private": true,
+  "workspaces": [
+    "filesystem",
+    "github",
+    "playwright",
+    "telegram",
+    "nvd"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "start:all": "node start-all.js",
+    "start:filesystem": "cd filesystem && node index.js",
+    "start:github":     "cd github     && node index.js",
+    "start:playwright": "cd playwright && node index.js",
+    "start:telegram":   "cd telegram   && node index.js",
+    "start:nvd":        "cd nvd        && node index.js"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "hackeadora-mcp-filesystem",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
