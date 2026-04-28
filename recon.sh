@@ -84,6 +84,9 @@ _setup_scan() {
 
 # ── Ejecutar un módulo ────────────────────────────────────────
 run_module() {
+  # run_module es immune a set -e: cualquier fallo interno no mata el pipeline
+  set +e
+
   local MOD_FILE="$1"
   local MOD_PATH="$SCRIPT_DIR/modules/${MOD_FILE}.sh"
   local MOD_NUM="${MOD_FILE%%_*}"
@@ -94,41 +97,43 @@ run_module() {
     for M in "${SELECTED[@]}"; do
       [[ "$MOD_NUM" == "$M" ]] && RUN=true && break
     done
-    [[ "$RUN" == false ]] && { log_debug "Saltando módulo $MOD_FILE"; return; }
+    if [[ "$RUN" == false ]]; then
+      log_debug "Saltando módulo $MOD_FILE"
+      set -e; return 0
+    fi
   fi
 
-  [[ ! -f "$MOD_PATH" ]] && { log_warn "Módulo no encontrado: $MOD_PATH"; return; }
+  if [[ ! -f "$MOD_PATH" ]]; then
+    log_warn "Módulo no encontrado: $MOD_PATH"
+    set -e; return 0
+  fi
 
-  source "$MOD_PATH"
+  source "$MOD_PATH" 2>/dev/null || true
   local SCAN_ID
-  SCAN_ID=$(db_scan_start "$DOMAIN_ID" "$MOD_FILE")
+  SCAN_ID=$(db_scan_start "$DOMAIN_ID" "$MOD_FILE" 2>/dev/null) || SCAN_ID=0
 
-  # Obtener timeout para este módulo
   local MOD_TIMEOUT
   MOD_TIMEOUT=$(_wd_get_timeout "$MOD_FILE" 2>/dev/null || echo 600)
 
-  # Ejecutar con watchdog (timeout + resource monitor)
-  # El watchdog con bash -c crea un subprocess que no hereda las funciones de bash.
-  # Cuando WATCHDOG_ENABLED=false, llamamos a module_run directamente en el shell actual.
+  local MOD_EXIT=0
   if [[ "${WATCHDOG_ENABLED:-true}" == "true" ]] && type watchdog_run &>/dev/null 2>&1; then
     watchdog_run "$MOD_FILE" "$MOD_TIMEOUT" \
       bash -c "source '$MOD_PATH' && module_run '$DOMAIN' '$DOMAIN_ID' '$OUT_DIR'"
-    local MOD_EXIT=$?
+    MOD_EXIT=$?
   else
-    set +e
     module_run "$DOMAIN" "$DOMAIN_ID" "$OUT_DIR"
-    local MOD_EXIT=$?
-    set -e
+    MOD_EXIT=$?
   fi
 
   if [[ "$MOD_EXIT" -eq 0 ]]; then
-    db_scan_end "$SCAN_ID" "ok"
+    db_scan_end "$SCAN_ID" "ok" 2>/dev/null || true
   else
-    db_scan_end "$SCAN_ID" "error"
+    db_scan_end "$SCAN_ID" "error" 2>/dev/null || true
     log_error "Módulo $MOD_FILE terminó con error (código $MOD_EXIT) — continuando pipeline"
   fi
 
   unset -f module_run MODULE_NAME MODULE_DESC 2>/dev/null || true
+  set -e
 }
 
 # ── Preparar modo single-target ───────────────────────────────
