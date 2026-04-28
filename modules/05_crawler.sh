@@ -9,6 +9,64 @@
 MODULE_NAME="crawler"
 MODULE_DESC="Crawling exhaustivo de URLs"
 
+# ── Deduplicar targets por contenido ─────────────────────────
+# Fingerprint = IP + MD5(body homepage)
+# Mismo IP + mismo contenido → mismo vhost → crawl una sola vez
+# Mismo IP + distinto contenido → virtual hosts distintos → crawl ambos
+_dedup_crawl_targets() {
+  local ALIVE="$1"
+  local OUT="$2"
+
+  > "$OUT"
+
+  local TOTAL
+  TOTAL=$(wc -l < "$ALIVE" | tr -d ' ')
+  log_info "Deduplicando $TOTAL subdominios por IP + contenido..."
+
+  declare -A _SEEN_FP  # fingerprint(ip:md5) → subdominio representativo
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+
+    # Resolver IP
+    local IP
+    IP=$(dig +short "$SUB" 2>/dev/null | grep -oP '^\d+\.\d+\.\d+\.\d+' | head -1)
+
+    if [[ -z "$IP" ]]; then
+      # Sin IP resoluble (CNAME externo, wildcard…) → incluir siempre
+      echo "$SUB" >> "$OUT"
+      continue
+    fi
+
+    # MD5 del body de la homepage (los primeros 50KB bastan para fingerprint)
+    local MD5
+    MD5=$(curl -sL --max-time 10 \
+      -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+      "https://${SUB}" 2>/dev/null \
+      | head -c 51200 | md5sum | cut -d' ' -f1)
+
+    # Si curl falló o devolvió body vacío, no podemos comparar → incluir
+    if [[ -z "$MD5" || "$MD5" == "d41d8cd98f00b204e9800998ecf8427e" ]]; then
+      echo "$SUB" >> "$OUT"
+      continue
+    fi
+
+    local FP="${IP}:${MD5}"
+
+    if [[ -n "${_SEEN_FP[$FP]:-}" ]]; then
+      log_info "  ⏭ $SUB duplica ${_SEEN_FP[$FP]} (IP $IP, MD5 ${MD5:0:8}…) — omitido"
+    else
+      _SEEN_FP[$FP]="$SUB"
+      echo "$SUB" >> "$OUT"
+    fi
+  done < "$ALIVE"
+
+  local FINAL
+  FINAL=$(wc -l < "$OUT" | tr -d ' ')
+  local SKIPPED=$(( TOTAL - FINAL ))
+  log_info "Dedup: $TOTAL → $FINAL subdominios únicos ($SKIPPED duplicados omitidos)"
+}
+
 module_run() {
   local DOMAIN="$1"
   local DOMAIN_ID="$2"
@@ -35,8 +93,12 @@ module_run() {
   local DEPTH="${CRAWL_DEPTH:-5}"
   local TIMEOUT="${CRAWL_TIMEOUT:-600}"
 
-  # Preparar lista con https://
-  sed 's|^|https://|' "$ALIVE" > "$TMP/targets.txt"
+  # ── Deduplicar targets antes de crawlear ──────────────────
+  local DEDUP_LIST="$TMP/targets_dedup.txt"
+  _dedup_crawl_targets "$ALIVE" "$DEDUP_LIST"
+
+  # Preparar lista con https:// para herramientas que lo necesitan
+  sed 's|^|https://|' "$DEDUP_LIST" > "$TMP/targets.txt"
 
   local KATANA_PROXY="" GOSPIDER_PROXY="" HAKRAWLER_PROXY=""
   if $PROXY_ACTIVE; then
@@ -94,7 +156,7 @@ module_run() {
     log_info "gospider (depth=$DEPTH)..."
     timeout "$TIMEOUT" \
       gospider \
-        -S "$ALIVE" \
+        -S "$DEDUP_LIST" \
         -d "$DEPTH" \
         -c 20 \
         -t 50 \
@@ -147,34 +209,28 @@ module_run() {
     log_warn "waybackurls no encontrado, saltando"
   fi
 
-  # ── robots.txt y sitemap.xml de cada subdominio ───────────
+  # ── robots.txt y sitemap.xml (solo targets únicos) ────────
   log_info "Extrayendo robots.txt y sitemap.xml..."
   while IFS= read -r SUB; do
     [[ -z "$SUB" ]] && continue
-    for PROTO in https http; do
-      local BASE="${PROTO}://${SUB}"
-      # robots.txt
-      curl -sL --max-time 10 "${BASE}/robots.txt" 2>/dev/null \
-        | grep -oP '(?<=Allow: |Disallow: )/[^\s]+' \
-        | sed "s|^|${BASE}|" \
-        >> "$TMP/robots.txt" || true
-      # sitemap
-      curl -sL --max-time 10 "${BASE}/sitemap.xml" 2>/dev/null \
-        | grep -oP 'https?://[^\s<>]+' \
-        >> "$TMP/sitemap.txt" || true
-      # sitemap index
-      curl -sL --max-time 10 "${BASE}/sitemap_index.xml" 2>/dev/null \
-        | grep -oP 'https?://[^\s<>]+\.xml' \
-        | while read -r SMAP; do
-            curl -sL --max-time 10 "$SMAP" 2>/dev/null \
-              | grep -oP 'https?://[^\s<>]+' \
-              >> "$TMP/sitemap.txt" || true
-          done
-      break  # HTTPS primero; si falla, no intentar HTTP para no duplicar
-    done
-  done < "$ALIVE"
+    local BASE="https://${SUB}"
+    curl -sL --max-time 10 "${BASE}/robots.txt" 2>/dev/null \
+      | grep -oP '(?<=Allow: |Disallow: )/[^\s]+' \
+      | sed "s|^|${BASE}|" \
+      >> "$TMP/robots.txt" || true
+    curl -sL --max-time 10 "${BASE}/sitemap.xml" 2>/dev/null \
+      | grep -oP 'https?://[^\s<>]+' \
+      >> "$TMP/sitemap.txt" || true
+    curl -sL --max-time 10 "${BASE}/sitemap_index.xml" 2>/dev/null \
+      | grep -oP 'https?://[^\s<>]+\.xml' \
+      | while read -r SMAP; do
+          curl -sL --max-time 10 "$SMAP" 2>/dev/null \
+            | grep -oP 'https?://[^\s<>]+' \
+            >> "$TMP/sitemap.txt" || true
+        done
+  done < "$DEDUP_LIST"
 
-  # ── Merge, filtrar y deduplicar ───────────────────────────
+  # ── Merge, filtrar y deduplicar URLs ─────────────────────
   log_info "Consolidando URLs..."
   cat "$TMP"/*.txt 2>/dev/null \
     | grep -oP 'https?://[^\s"<>\]\[{}]+' \
