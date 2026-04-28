@@ -17,6 +17,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── PATH — incluir directorios de herramientas Go y locales ──
+export PATH="$PATH:/root/go/bin:/root/.local/bin:/usr/local/go/bin"
+
 # ── Cargar configuración ──────────────────────────────────────
 CONFIG="$SCRIPT_DIR/config.env"
 if [[ ! -f "$CONFIG" ]]; then

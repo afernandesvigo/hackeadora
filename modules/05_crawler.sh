@@ -45,11 +45,10 @@ module_run() {
 
     timeout "$TIMEOUT" \
       "${KATANA_BIN:-katana}" \
-        -l "$TMP/katana_input.txt" \
+        -list "$TMP/katana_input.txt" \
         -d "$DEPTH" \
         -silent \
         -jc \
-        -kf all \
         -o "$TMP/katana.txt" \
         ${KATANA_PROXY} \
         2>/dev/null \
