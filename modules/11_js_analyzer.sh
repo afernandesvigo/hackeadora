@@ -81,6 +81,20 @@ declare -a ENDPOINT_PATTERNS=(
   "\.(get|post|put|patch|delete)\(['\"\`]([^'\"\`\s]{3,200})['\"\`]"
 )
 
+# ── Patrones de endpoints sensibles a probar ─────────────────
+declare -a _SENSITIVE_API_PATTERNS=(
+  "/api/.*/me(\.json)?$"
+  "/api/.*/users?/me"
+  "/api/.*/profile(\.json)?$"
+  "/api/.*/account(\.json)?$"
+  "/api/.*/whoami"
+  "/api/.*/session(\.json)?$"
+  "/api/.*/token(s)?(\.json)?$"
+  "/api/.*/auth/token"
+  "/users?/me(\.json)?$"
+  "/me\.json$"
+)
+
 # ── Helpers ───────────────────────────────────────────────────
 _mask_secret() {
   # Muestra primeros 6 y últimos 4 chars, oculta el centro
@@ -108,6 +122,99 @@ _is_likely_false_positive() {
     [[ "$CTX" == *"$PAT"* ]] && return 0
   done
   return 1
+}
+
+# ── Probe de endpoints sensibles sin autenticación ───────────
+_probe_api_endpoint() {
+  local FULL_URL="$1"
+  local DOMAIN_ID="$2"
+  local DOMAIN="$3"
+
+  # Verificar si el path hace match con un patrón sensible
+  local PATH_PART
+  PATH_PART=$(echo "$FULL_URL" | sed 's|https\?://[^/]*||')
+  local MATCH=false
+  for PAT in "${_SENSITIVE_API_PATTERNS[@]}"; do
+    [[ "$PATH_PART" =~ $PAT ]] && MATCH=true && break
+  done
+  [[ "$MATCH" == false ]] && return
+
+  log_info "  🔍 Probando endpoint sin auth: $FULL_URL"
+
+  local TMP_RESP
+  TMP_RESP=$(mktemp /tmp/recon_api_XXXXXX.json)
+
+  local STATUS
+  STATUS=$(curl -s --max-time 10 --max-redirs 2 \
+    -H "Accept: application/json" \
+    -H "User-Agent: Mozilla/5.0 (compatible; Hackeadora/1.0)" \
+    -o "$TMP_RESP" -w "%{http_code}" \
+    "$FULL_URL" 2>/dev/null)
+
+  if [[ "$STATUS" != "200" ]]; then
+    rm -f "$TMP_RESP"; return
+  fi
+
+  # Verificar que es JSON válido
+  python3 -c "import json; json.load(open('$TMP_RESP'))" 2>/dev/null || {
+    rm -f "$TMP_RESP"; return
+  }
+
+  # Buscar campos sensibles en la respuesta
+  local FOUND
+  FOUND=$(python3 - "$TMP_RESP" <<'PYEOF' 2>/dev/null
+import json, sys
+SENSITIVE = ["token","access_token","refresh_token","api_key","secret",
+             "password","auth_token","jwt","authenticity_token","csrf_token",
+             "session_id","private_key","client_secret","bearer","key"]
+found = []
+def search(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if any(s in k.lower() for s in SENSITIVE):
+                sv = str(v) if v else ""
+                if sv and sv.lower() not in ("null","none","","false","true","0"):
+                    found.append(f"{k}={sv[:80]}")
+            search(v)
+    elif isinstance(obj, list):
+        for v in obj: search(v)
+try:
+    search(json.load(open(sys.argv[1])))
+except: pass
+print("\n".join(found[:10]))
+PYEOF
+  )
+
+  local BODY_EXCERPT
+  BODY_EXCERPT=$(head -c 600 "$TMP_RESP")
+  rm -f "$TMP_RESP"
+
+  [[ -z "$FOUND" ]] && {
+    # Respuesta 200 JSON sin campos sensibles — avisar igualmente para inspección manual
+    log_info "  ℹ️  Endpoint sin auth OK pero sin campos sensibles obvios: $FULL_URL"
+    return
+  }
+
+  local DETAIL="API endpoint accesible sin autenticación (HTTP $STATUS)
+URL: $FULL_URL
+Campos sensibles:
+$FOUND
+Respuesta:
+$BODY_EXCERPT"
+
+  log_warn "⚠️  API INFO DISCLOSURE: $FULL_URL"
+  log_warn "    Campos: $(echo "$FOUND" | tr '\n' ' ')"
+
+  db_add_finding "$DOMAIN_ID" "api_info_disclosure" "high" \
+    "$FULL_URL" "unauthenticated_api" "$DETAIL"
+
+  _telegram_send "⚠️ *API Info Disclosure*
+🌐 Dominio: \`${DOMAIN}\`
+🎯 URL: \`${FULL_URL}\`
+🔓 Accesible sin auth — HTTP ${STATUS}
+📋 Campos: \`$(echo "$FOUND" | head -3 | tr '\n' ' ' | cut -c1-200)\`
+🔍 Requiere investigación manual
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 }
 
 # ── Descarga y análisis de un JS ──────────────────────────────
@@ -248,10 +355,10 @@ Contexto: $CONTEXT"
           ((EP_COUNT++))
           log_info "  ↳ endpoint: $EP${FULL_URL:+ → $FULL_URL}"
 
-          # Si tiene URL completa, añadir a la tabla urls para que
-          # entre en nuclei + active_scan en el próximo ciclo
           if [[ -n "$FULL_URL" ]]; then
             db_add_url "$DOMAIN_ID" "$FULL_URL" "js_analyzer" ""
+            # Probar si es un endpoint sensible accesible sin autenticación
+            _probe_api_endpoint "$FULL_URL" "$DOMAIN_ID" "$DOMAIN"
           fi
         fi
       done
