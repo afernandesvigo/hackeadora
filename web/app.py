@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -929,15 +929,6 @@ def _vault_mask(value: str) -> str:
     except:
         return "****"
 
-class VaultAddRequest(BaseModel):
-    domain: str
-    subdomain: str
-    app_url: str
-    username: str
-    password: str
-    auth_type: str = "form"
-    notes: str = ""
-
 class BaseModel:
     pass
 
@@ -952,7 +943,8 @@ try:
         auth_type: str = "form"
         notes: str = ""
 except ImportError:
-    pass
+    class VaultAddRequest(BaseModel):
+        pass
 
 
 @app.get("/api/vault")
@@ -1606,28 +1598,6 @@ def domain_cache_findings(domain: str):
 
 # ── PoC Generator ─────────────────────────────────────────────
 import subprocess as _subprocess2
-
-@app.post("/api/findings/{finding_id}/poc")
-async def generate_finding_poc(finding_id: int):
-    """Genera PoC con datos reales para un finding concreto."""
-    script = Path(__file__).parent.parent / "core" / "poc_generator.py"
-    out_dir = Path(__file__).parent.parent / "output" / "poc"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {"status": "running", "finding_id": finding_id}
-
-    def _run():
-        try:
-            _subprocess2.run(
-                [sys.executable, str(script), "--finding-id", str(finding_id),
-                 "--output", str(out_dir)],
-                timeout=120, capture_output=False
-            )
-        except Exception as e:
-            print(f"[poc] {e}")
-
-    threading.Thread(target=_run, daemon=True).start()
-    return result
 
 @app.post("/api/domains/{domain}/poc")
 async def generate_domain_poc(domain: str, request: Request):
