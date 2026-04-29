@@ -233,7 +233,7 @@ module_run() {
   TOTAL=$(wc -l < "$TARGETS_403" | tr -d ' ')
 
   if [[ "$TOTAL" -eq 0 ]]; then
-    log_info "Sin endpoints 403/401 encontrados para testear bypass"
+    log_ok "$MODULE_DESC completado: sin endpoints 403/401 para testear"
     rm -f "$TARGETS_403"
     return
   fi

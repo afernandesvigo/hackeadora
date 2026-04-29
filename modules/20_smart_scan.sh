@@ -328,8 +328,9 @@ _test_nuclei_by_tags() {
   | while IFS= read -r LINE; do
     [[ -z "$LINE" ]] && continue
     local TEMPLATE SEV HOST
-    TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
-    SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+    TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id',''))" 2>/dev/null)
+    [[ -z "$TEMPLATE" ]] && continue
+    SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','info'))" 2>/dev/null)
     HOST=$(echo "$LINE"     | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('matched-at',d.get('host','?')))" 2>/dev/null)
     log_warn "  ⚡ [$SEV] $TEMPLATE @ $HOST"
     notify_nuclei_finding "$DOMAIN" "$TEMPLATE" "$SEV" "$HOST" "Smart scan KB"

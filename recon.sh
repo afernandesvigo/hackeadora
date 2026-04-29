@@ -8,6 +8,7 @@
 #    ./recon.sh empresa.com --target app.empresa.com → subdominio específico
 #    ./recon.sh empresa.com --schedule             → loop cada 12h
 #    ./recon.sh empresa.com --modules=20,22,23     → módulos concretos
+#    ./recon.sh empresa.com --skip-modules=06,08   → excluir módulos del scan completo
 #    ./recon.sh empresa.com --target app.empresa.com --modules=22,23,24
 #    ./recon.sh --test-telegram                    → probar Telegram
 #    ./recon.sh --stats empresa.com                → ver stats de DB
@@ -33,6 +34,7 @@ DOMAIN=""
 TARGET_SUB=""      # subdominio específico (--target)
 SCHEDULE=false
 ONLY_MODULES=""
+SKIP_MODULES=""
 FORCE_BREACH=false
 SHOW_STATS=false
 
@@ -41,6 +43,7 @@ for ARG in "$@"; do
     --schedule)       SCHEDULE=true ;;
     --force-breach)   FORCE_BREACH=true ;;
     --modules=*)      ONLY_MODULES="${ARG#*=}" ;;
+    --skip-modules=*) SKIP_MODULES="${ARG#*=}" ;;
     --target=*)       TARGET_SUB="${ARG#*=}" ;;
     --test-telegram)
       source "$SCRIPT_DIR/core/logger.sh"
@@ -90,6 +93,16 @@ run_module() {
   local MOD_FILE="$1"
   local MOD_PATH="$SCRIPT_DIR/modules/${MOD_FILE}.sh"
   local MOD_NUM="${MOD_FILE%%_*}"
+
+  if [[ -n "$SKIP_MODULES" ]]; then
+    IFS=',' read -ra SKIPPED <<< "$SKIP_MODULES"
+    for M in "${SKIPPED[@]}"; do
+      if [[ "$MOD_NUM" == "$M" ]]; then
+        log_debug "Saltando módulo $MOD_FILE (--skip-modules)"
+        set -e; return 0
+      fi
+    done
+  fi
 
   if [[ -n "$ONLY_MODULES" ]]; then
     local RUN=false
@@ -205,6 +218,10 @@ _run_pipeline() {
     run_module "22_cors_check"
     run_module "23_403_bypass"
     run_module "24_http_smuggling"
+    run_module "25_cms_scan"
+    run_module "26_path_confusion"
+    run_module "27_blind_xss"
+    run_module "28_cache_attacks"
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
 
@@ -238,6 +255,10 @@ _run_pipeline() {
     run_module "22_cors_check"
     run_module "23_403_bypass"
     run_module "24_http_smuggling"
+    run_module "25_cms_scan"
+    run_module "26_path_confusion"
+    run_module "27_blind_xss"
+    run_module "28_cache_attacks"
 
     # Nuclei al final — con todos los subdominios y URLs ya descubiertos
     run_module "04_nuclei_scan"

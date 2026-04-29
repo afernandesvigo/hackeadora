@@ -58,7 +58,7 @@ _do_login() {
 
       # Extraer action del form
       local FORM_ACTION
-      FORM_ACTION=$(echo "$FORM_HTML" | grep -oiP '(?<=action=["\'])[^"\']+' | head -1)
+      FORM_ACTION=$(echo "$FORM_HTML" | grep -oiP "(?<=action=[\"'])[^\"']+" | head -1)
       [[ -z "$FORM_ACTION" ]] && FORM_ACTION="$APP_URL"
       # Resolver URL relativa
       echo "$FORM_ACTION" | grep -qP '^https?' || \
@@ -68,17 +68,17 @@ _do_login() {
       local HIDDEN_FIELDS=""
       while IFS= read -r FIELD; do
         local FNAME FVAL
-        FNAME=$(echo "$FIELD" | grep -oiP 'name=["\'][^"\']+["\']' | sed "s/name=[\"']//;s/[\"']//" | head -1)
-        FVAL=$(echo "$FIELD"  | grep -oiP 'value=["\'][^"\']*["\']' | sed "s/value=[\"']//;s/[\"']//" | head -1)
+        FNAME=$(echo "$FIELD" | grep -oiP "name=[\"'][^\"']+[\"']" | sed "s/name=[\"']//;s/[\"']//" | head -1)
+        FVAL=$(echo "$FIELD"  | grep -oiP "value=[\"'][^\"']*[\"']" | sed "s/value=[\"']//;s/[\"']//" | head -1)
         [[ -n "$FNAME" ]] && HIDDEN_FIELDS+="&${FNAME}=${FVAL}"
-      done < <(echo "$FORM_HTML" | grep -oiP '<input[^>]+type=["\']hidden["\'][^>]*>' | head -10)
+      done < <(echo "$FORM_HTML" | grep -oiP "<input[^>]+type=[\"']hidden[\"'][^>]*>" | head -10)
 
       # Detectar nombres de campos usuario/password
       local USER_FIELD PASS_FIELD
-      USER_FIELD=$(echo "$FORM_HTML" | grep -oiP '<input[^>]+(type=["\']?(text|email)["\']?)[^>]*>' | \
-        grep -oiP 'name=["\'][^"\']+["\']' | sed "s/name=[\"']//;s/[\"']//" | head -1)
-      PASS_FIELD=$(echo "$FORM_HTML" | grep -oiP '<input[^>]+type=["\']password["\'][^>]*>' | \
-        grep -oiP 'name=["\'][^"\']+["\']' | sed "s/name=[\"']//;s/[\"']//" | head -1)
+      USER_FIELD=$(echo "$FORM_HTML" | grep -oiP "<input[^>]+(type=[\"']?(text|email)[\"']?)[^>]*>" | \
+        grep -oiP "name=[\"'][^\"']+[\"']" | sed "s/name=[\"']//;s/[\"']//" | head -1)
+      PASS_FIELD=$(echo "$FORM_HTML" | grep -oiP "<input[^>]+type=[\"']password[\"'][^>]*>" | \
+        grep -oiP "name=[\"'][^\"']+[\"']" | sed "s/name=[\"']//;s/[\"']//" | head -1)
 
       [[ -z "$USER_FIELD" ]] && USER_FIELD="username"
       [[ -z "$PASS_FIELD" ]] && PASS_FIELD="password"
