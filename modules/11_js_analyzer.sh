@@ -20,7 +20,7 @@ MODULE_DESC="Análisis de JS — secrets y endpoints"
 declare -a SECRET_PATTERNS=(
   # Cloud providers
   "AWS_ACCESS_KEY|AKIA[0-9A-Z]{16}"
-  "AWS_SECRET_KEY|(?<=[^A-Za-z0-9])[A-Za-z0-9/+=]{40}(?=[^A-Za-z0-9])"
+  "AWS_SECRET_KEY|(?i)(?:aws.?secret|SecretAccessKey|secret.access.key)[\s:=\"']{0,20}([A-Za-z0-9/+=]{40})"
   "GOOGLE_API_KEY|AIza[0-9A-Za-z\\-_]{35}"
   "GOOGLE_OAUTH|[0-9]+-[0-9A-Za-z_]{32}\\.apps\\.googleusercontent\\.com"
   "FIREBASE_KEY|AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}"
@@ -32,7 +32,6 @@ declare -a SECRET_PATTERNS=(
   "BRAINTREE|access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"
   # Auth / tokens
   "GITHUB_TOKEN|gh[pousr]_[A-Za-z0-9_]{36,255}"
-  "GITHUB_OAUTH|[0-9a-f]{40}"
   "SLACK_TOKEN|xox[baprs]-([0-9a-zA-Z]{10,48})"
   "SLACK_WEBHOOK|https://hooks\\.slack\\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+"
   "DISCORD_TOKEN|[MN][A-Za-z0-9]{23}\\.[A-Za-z0-9_-]{6}\\.[A-Za-z0-9_-]{27}"
@@ -96,12 +95,17 @@ _mask_secret() {
 
 _is_likely_false_positive() {
   local VAL="$1"
+  local CTX="${2:-}"
   # Descarta placeholders comunes
   local FP_PATTERNS=("your_" "YOUR_" "example" "EXAMPLE" "placeholder"
                      "xxxxxxx" "XXXXXXX" "000000" "111111" "test123"
-                     "changeme" "CHANGEME" "<" ">" "\${" "{{")
+                     "changeme" "CHANGEME" "<" ">" "\${" "{{"
+                     "REQUEST_ID" "Request ID" "RequestId" "requestId"
+                     "correlationId" "traceId" "spanId" "x-amz-request"
+                     "X-Request-ID" "CloudFront" "cloudfront")
   for PAT in "${FP_PATTERNS[@]}"; do
     [[ "$VAL" == *"$PAT"* ]] && return 0
+    [[ "$CTX" == *"$PAT"* ]] && return 0
   done
   return 1
 }
@@ -152,11 +156,12 @@ _analyze_js_file() {
     # grep -P para PCRE, -n para nº línea, -o para solo el match
     while IFS=: read -r LINENUM MATCH; do
       [[ -z "$MATCH" ]] && continue
-      _is_likely_false_positive "$MATCH" && continue
 
-      # Extraer contexto (la línea completa, truncada)
+      # Extraer contexto antes de filtrar para poder usarlo en el check
       local CONTEXT
       CONTEXT=$(sed -n "${LINENUM}p" "$JS_FILE" 2>/dev/null | cut -c1-200 | tr "'" '"')
+
+      _is_likely_false_positive "$MATCH" "$CONTEXT" && continue
 
       local MASKED
       MASKED=$(_mask_secret "$MATCH")
