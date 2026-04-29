@@ -15,7 +15,7 @@ _EMOJI_INFO="ℹ️"
 _EMOJI_SCAN_START="🚀"
 _EMOJI_SCAN_END="✅"
 
-# ── Función base ─────────────────────────────────────────────
+# ── Función base — split automático si supera 4096 chars ─────
 _telegram_send() {
   local TEXT="$1"
 
@@ -24,15 +24,40 @@ _telegram_send() {
     return 0
   fi
 
-  curl -s -X POST \
-    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d chat_id="${TELEGRAM_CHAT_ID}" \
-    -d parse_mode="Markdown" \
-    -d disable_web_page_preview="true" \
-    --data-urlencode "text=${TEXT}" \
-    -o /dev/null \
-    --fail \
-  || log_warn "Error enviando mensaje a Telegram"
+  local MAX=4000  # margen bajo el límite de 4096 de Telegram
+  local LEN=${#TEXT}
+
+  if [[ "$LEN" -le "$MAX" ]]; then
+    # Mensaje corto — enviar directo
+    curl -s -X POST \
+      "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -d chat_id="${TELEGRAM_CHAT_ID}" \
+      -d parse_mode="Markdown" \
+      -d disable_web_page_preview="true" \
+      --data-urlencode "text=${TEXT}" \
+      -o /dev/null --fail \
+    || log_warn "Error enviando mensaje a Telegram"
+  else
+    # Mensaje largo — partir en chunks y enviar cada uno
+    local OFFSET=0
+    local PART=1
+    local TOTAL=$(( (LEN + MAX - 1) / MAX ))
+    while [[ "$OFFSET" -lt "$LEN" ]]; do
+      local CHUNK="${TEXT:$OFFSET:$MAX}"
+      local HEADER=""
+      [[ "$TOTAL" -gt 1 ]] && HEADER="*(${PART}/${TOTAL})*"$'\n'
+      curl -s -X POST \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d chat_id="${TELEGRAM_CHAT_ID}" \
+        -d parse_mode="Markdown" \
+        -d disable_web_page_preview="true" \
+        --data-urlencode "text=${HEADER}${CHUNK}" \
+        -o /dev/null --fail \
+      || log_warn "Error enviando parte ${PART}/${TOTAL} a Telegram"
+      OFFSET=$(( OFFSET + MAX ))
+      (( PART++ ))
+    done
+  fi
 }
 
 # ── Notificaciones tipadas ────────────────────────────────────
