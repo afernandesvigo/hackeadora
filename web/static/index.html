@@ -660,6 +660,29 @@ tr:hover td { background: rgba(0,200,255,.025); }
 .acx-status-failed   { color:var(--red); }
 
 
+/* ── Finding expand ──────────────────────────────────────── */
+.finding-row { cursor: pointer; }
+.finding-row:hover td { background: rgba(0,200,255,.04) !important; }
+.finding-row.expanded td { background: rgba(0,200,255,.06) !important; border-bottom: none; }
+.finding-detail-row td { padding: 0 !important; background: var(--bg3) !important; }
+.finding-detail-panel {
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  animation: fadeIn .15s ease;
+}
+.fd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-bottom: 12px; }
+.fd-field { display: flex; flex-direction: column; gap: 3px; }
+.fd-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.fd-value { font-size: 12px; color: var(--text); word-break: break-all; }
+.fd-pre {
+  margin-top: 10px; padding: 12px 14px;
+  background: var(--bg2); border: 1px solid var(--border2); border-radius: 4px;
+  font-size: 11px; color: var(--text); white-space: pre-wrap; word-break: break-all;
+  max-height: 220px; overflow-y: auto; line-height: 1.6;
+}
+.fd-actions { margin-top: 14px; display: flex; gap: 8px; }
+
 /* ── Blind XSS styles ────────────────────────────────────── */
 .bxss-payload-card {
   background:var(--bg2); border:1px solid var(--border);
@@ -1019,21 +1042,22 @@ async function renderAllFindings() {
     <div class="table-wrap">
       <div class="table-header"><span class="t-title">Todos los Findings</span><span class="t-count">${findings.length}</span></div>
       <table>
-        <thead><tr><th>Severidad</th><th>Tipo</th><th>Target</th><th>Template</th><th>Dominio</th><th>Fecha</th><th>PoC</th></tr></thead>
+        <thead><tr><th>Severidad</th><th>Tipo</th><th>Target</th><th>Template</th><th>Dominio</th><th>Fecha</th></tr></thead>
         <tbody>
-        ${findings.length ? findings.map(f => `
-          <tr>
+        ${findings.length ? findings.map((f,i) => `
+          <tr class="finding-row" onclick="toggleFinding(this, ${i}, '_allFindings')">
             <td>${severityBadge(f.severity)}</td>
             <td>${typeBadge(f.type)}</td>
-            <td style="color:var(--text)">${f.target}</td>
-            <td style="color:var(--muted)">${f.template||'—'}</td>
-            <td style="color:var(--accent2);cursor:pointer" onclick="selectDomain('${f.domain}')">${f.domain}</td>
+            <td style="color:var(--text)">${escHtml(f.target||'')}</td>
+            <td style="color:var(--muted)">${escHtml(f.template||'—')}</td>
+            <td style="color:var(--accent2)">${escHtml(f.domain||'')}</td>
             <td style="color:var(--muted)">${(f.found_at||'').slice(0,16)}</td>
           </tr>`).join('')
           : '<tr><td colspan="6" class="empty">Sin findings</td></tr>'}
         </tbody>
       </table>
     </div>`;
+  window._allFindings = findings;
 }
 
 // ── Domain view ───────────────────────────────────────────────
@@ -1235,6 +1259,7 @@ async function renderUrls(domain, ct) {
 
 // ── Findings tab ──────────────────────────────────────────────
 function renderFindings(findings, ct) {
+  window._domainFindings = findings;
   ct.innerHTML = `
     <div class="table-wrap">
       <div class="table-header">
@@ -1244,13 +1269,13 @@ function renderFindings(findings, ct) {
       <table>
         <thead><tr><th>Severidad</th><th>Tipo</th><th>Target</th><th>Template</th><th>Detalle</th><th>Fecha</th></tr></thead>
         <tbody>
-        ${findings.length ? findings.map(f => `
-          <tr>
+        ${findings.length ? findings.map((f,i) => `
+          <tr class="finding-row" onclick="toggleFinding(this, ${i}, '_domainFindings')">
             <td>${severityBadge(f.severity)}</td>
             <td>${typeBadge(f.type)}</td>
-            <td style="color:var(--text)">${f.target}</td>
-            <td style="color:var(--muted)">${f.template||'—'}</td>
-            <td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis" title="${(f.detail||'').replace(/"/g,"'")}">${f.detail||'—'}</td>
+            <td style="color:var(--text)">${escHtml(f.target||'')}</td>
+            <td style="color:var(--muted)">${escHtml(f.template||'—')}</td>
+            <td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis">${escHtml((f.detail||'—').slice(0,80))}</td>
             <td style="color:var(--muted)">${(f.found_at||'').slice(0,16)}</td>
           </tr>`).join('')
           : '<tr><td colspan="6" class="empty">Sin findings — ¡todo limpio!</td></tr>'}
@@ -1356,6 +1381,79 @@ function techBadges(techJson) {
     const techs = JSON.parse(techJson || '[]');
     return techs.slice(0,3).map(t => `<span style="color:var(--accent2);font-size:9px;border:1px solid var(--border2);padding:1px 4px;border-radius:2px">${t}</span>`).join(' ');
   } catch { return ''; }
+}
+
+// ── Finding expand ────────────────────────────────────────────
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function toggleFinding(tr, idx, storeKey) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('finding-detail-row')) {
+    next.remove();
+    tr.classList.remove('expanded');
+    return;
+  }
+  tr.classList.add('expanded');
+
+  const f = (window[storeKey] || [])[idx];
+  if (!f) return;
+
+  const row = document.createElement('tr');
+  row.className = 'finding-detail-row';
+  row.innerHTML = `<td colspan="7">
+    <div class="finding-detail-panel">
+      <div class="fd-grid">
+        <div class="fd-field">
+          <span class="fd-label">Severidad</span>
+          <span>${severityBadge(f.severity)}</span>
+        </div>
+        <div class="fd-field">
+          <span class="fd-label">Tipo</span>
+          <span>${typeBadge(f.type)}</span>
+        </div>
+        <div class="fd-field">
+          <span class="fd-label">Target</span>
+          <span class="fd-value" style="color:var(--accent2)">${escHtml(f.target||'—')}</span>
+        </div>
+        <div class="fd-field">
+          <span class="fd-label">Template</span>
+          <span class="fd-value">${escHtml(f.template||'—')}</span>
+        </div>
+        <div class="fd-field">
+          <span class="fd-label">Fecha</span>
+          <span class="fd-value" style="color:var(--muted)">${(f.found_at||'').slice(0,19)}</span>
+        </div>
+        ${f.domain ? `<div class="fd-field">
+          <span class="fd-label">Dominio</span>
+          <span class="fd-value" style="color:var(--accent2);cursor:pointer" onclick="selectDomain('${escHtml(f.domain)}')">${escHtml(f.domain)}</span>
+        </div>` : ''}
+      </div>
+      ${f.detail ? `<div>
+        <div class="fd-label">Detalle</div>
+        <pre class="fd-pre">${escHtml(f.detail)}</pre>
+      </div>` : ''}
+      ${f.id ? `<div class="fd-actions">
+        <button class="btn primary" onclick="generatePoC(${f.id}, this)">📄 Generar PoC</button>
+      </div>` : ''}
+    </div>
+  </td>`;
+  tr.parentNode.insertBefore(row, tr.nextSibling);
+}
+
+async function generatePoC(findingId, btn) {
+  btn.disabled = true; btn.textContent = '⏳ Generando...';
+  try {
+    await fetch(`/api/findings/${findingId}/poc`, {method:'POST'});
+    btn.textContent = '✓ PoC generada';
+    btn.style.color = 'var(--accent)';
+  } catch(e) {
+    btn.textContent = '✗ Error';
+    btn.disabled = false;
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────
