@@ -182,7 +182,9 @@ _analyze_js_file() {
 
         # También como finding en la tabla principal
         db_add_finding "$DOMAIN_ID" "js_secret" "high" \
-          "$JS_URL" "$STYPE" "Secret tipo $STYPE en línea $LINENUM: $MASKED"
+          "$JS_URL" "$STYPE" "Tipo: $STYPE | Línea: $LINENUM | Valor: $MASKED
+Archivo: $JS_URL
+Contexto: $CONTEXT"
       fi
     done < <(grep -Pn "$REGEX" "$JS_FILE" 2>/dev/null | head -20 || true)
   done
