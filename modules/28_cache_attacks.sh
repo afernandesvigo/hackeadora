@@ -196,7 +196,7 @@ _test_cache_poisoning() {
     nuclei -u "$BASE_URL" \
       -tags "cache,cache-poisoning,host-header" \
       -severity "medium,high,critical" \
-      -silent -json 2>/dev/null | \
+      -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TPL SEV HOST
@@ -409,7 +409,7 @@ PATHS
   if command -v nuclei &>/dev/null; then
     nuclei -u "$BASE_URL" \
       -tags "cache-deception,web-cache-deception" \
-      -silent -json 2>/dev/null | \
+      -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TPL SEV HOST

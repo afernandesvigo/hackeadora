@@ -251,7 +251,7 @@ _test_apache_confusion() {
   if command -v nuclei &>/dev/null; then
     nuclei -u "$BASE" \
       -tags "apache,cve-2024-38475,cve-2024-38476,cve-2024-38477,cve-2024-38473,cve-2024-38474,cve-2024-39573" \
-      -silent -json 2>/dev/null | \
+      -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TPL SEV HOST
@@ -422,7 +422,7 @@ _test_tomcat_rewrite_traversal() {
   if command -v nuclei &>/dev/null; then
     nuclei -u "$BASE" \
       -tags "tomcat,cve-2025-55752,cve-2025-24813" \
-      -silent -json 2>/dev/null | \
+      -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TPL SEV HOST
@@ -504,7 +504,7 @@ _test_spring_traversal() {
   if command -v nuclei &>/dev/null; then
     nuclei -u "$BASE" \
       -tags "spring,cve-2024-38819,cve-2024-38816" \
-      -silent -json 2>/dev/null | \
+      -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TPL SEV HOST

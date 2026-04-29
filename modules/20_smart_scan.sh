@@ -118,7 +118,7 @@ _test_ssrf() {
   if command -v nuclei &>/dev/null; then
     local NUCLEI_OUT
     NUCLEI_OUT=$(nuclei -u "${URL}?${PARAM}=${CALLBACK}" \
-      -tags ssrf,oob -silent -json 2>/dev/null | head -5)
+      -tags ssrf,oob -silent -jsonl 2>/dev/null | head -5)
     if [[ -n "$NUCLEI_OUT" ]]; then
       log_warn "  ⚡ SSRF finding: $URL"
       echo "$NUCLEI_OUT" | while IFS= read -r LINE; do
@@ -322,7 +322,7 @@ _test_nuclei_by_tags() {
     -u "$URL" \
     -tags "$TAGS" \
     -severity "$SEVERITY" \
-    -silent -json \
+    -silent -jsonl \
     ${PROXY_FLAG} \
     2>/dev/null \
   | while IFS= read -r LINE; do

@@ -144,7 +144,7 @@ _test_nuclei_smuggling() {
   local NUCLEI_OUT
   NUCLEI_OUT=$(nuclei -u "$URL" \
     -tags "smuggling,http-smuggling,request-smuggling" \
-    -silent -json 2>/dev/null | head -5)
+    -silent -jsonl 2>/dev/null | head -5)
 
   if [[ -n "$NUCLEI_OUT" ]]; then
     echo "$NUCLEI_OUT" | while IFS= read -r LINE; do
@@ -191,6 +191,12 @@ _test_timing_detection() {
       db_add_finding "$DOMAIN_ID" "http_smuggling" "medium" \
         "$URL" "timing_detection" \
         "Timing anomaly: normal=${NORMAL_TIME}ms TE=${TE_TIME}ms diff=${DIFF}ms"
+      _telegram_send "🚨 *HTTP Smuggling — Timing Anomaly*
+🌐 \`${DOMAIN}\`
+🔗 \`${URL}\`
+⏱️ Normal: \`${NORMAL_TIME}ms\` → TE: \`${TE_TIME}ms\` (diff: ${DIFF}ms)
+⚠️ Verificar manualmente con Burp Repeater
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
     fi
   fi
 }

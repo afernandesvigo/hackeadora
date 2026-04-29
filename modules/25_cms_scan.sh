@@ -359,7 +359,7 @@ _scan_aem() {
 
     # Nuclei templates AEM
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "aem,adobe" -silent -json 2>/dev/null | \
+      nuclei -u "$BASE" -tags "aem,adobe" -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -401,7 +401,7 @@ _scan_liferay() {
 
     # CVE-2020-7961 — Deserialización RCE (uno de los más famosos en H1)
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "liferay,cve-2020-7961" -silent -json 2>/dev/null | \
+      nuclei -u "$BASE" -tags "liferay,cve-2020-7961" -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -461,7 +461,7 @@ _scan_sap() {
     if command -v nuclei &>/dev/null; then
       nuclei -u "$BASE" \
         -tags "sap,netweaver,cve-2020-6287,cve-2020-6286" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV HOST
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -490,7 +490,7 @@ _scan_jenkins() {
       nuclei -u "$BASE" \
         -tags "jenkins,rce,exposure" \
         -severity "medium,high,critical" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -522,7 +522,7 @@ _scan_atlassian() {
     if command -v nuclei &>/dev/null; then
       nuclei -u "$BASE" \
         -tags "confluence,jira,atlassian,cve-2022-26134,cve-2021-26084" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -583,7 +583,7 @@ _scan_spring() {
     if command -v nuclei &>/dev/null; then
       nuclei -u "$BASE" \
         -tags "spring,cve-2022-22965,spring4shell" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -651,7 +651,7 @@ _scan_log4shell() {
 
   # ── Nuclei con templates Log4Shell ────────────────────────
   if command -v nuclei &>/dev/null && [[ -s "$JAVA_TARGETS" ]]; then
-    nuclei       -l "$JAVA_TARGETS"       -tags "log4j,cve-2021-44228,cve-2021-45046,cve-2021-45105"       -silent -json 2>/dev/null |       while IFS= read -r LINE; do
+    nuclei       -l "$JAVA_TARGETS"       -tags "log4j,cve-2021-44228,cve-2021-45046,cve-2021-45105"       -silent -jsonl 2>/dev/null |       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
         local TEMPLATE SEV HOST
         TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -690,7 +690,7 @@ _scan_magento() {
     if command -v nuclei &>/dev/null; then
       nuclei -u "$BASE" \
         -tags "magento,ecommerce" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -720,7 +720,7 @@ _scan_apache_struts() {
     if command -v nuclei &>/dev/null; then
       nuclei -u "$BASE" \
         -tags "struts,cve-2017-5638,cve-2023-50164" \
-        -silent -json 2>/dev/null | \
+        -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
@@ -809,7 +809,7 @@ _scan_react2shell() {
 
   local R2S_OUT="$OUT_DIR/.react2shell_results.json"
 
-  local R2S_CMD="nuclei -l ${TARGETS} -t ${TEMPLATE_FILE} -silent -json 2>/dev/null > ${R2S_OUT}"
+  local R2S_CMD="nuclei -l ${TARGETS} -t ${TEMPLATE_FILE} -silent -jsonl 2>/dev/null > ${R2S_OUT}"
 
   # IP rotada — es un check de RCE, mejor desde IP limpia
   if rotator_enabled; then
