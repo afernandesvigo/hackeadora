@@ -3,38 +3,19 @@
 #  modules/12_login_finder.sh
 #  Fase 12: Detección de formularios de login
 #
-#  Para cada URL descubierta, hace GET y parsea el DOM:
-#    - <input type="password"> → formulario de login
-#    - Rutas conocidas: /admin, /login, /signin, /wp-login...
-#    - SSO / OAuth: /oauth, /saml, /.well-known/openid-configuration
-#    - Campos de formulario (action, method, inputs)
+#  Estrategia en dos fuentes:
+#   1. URLs ya descubiertas por el crawler que parecen login
+#      (sin re-crawlear nada — alta precisión, coste cero)
+#   2. Probing guiado por tech fingerprint: solo paths relevantes
+#      para la tecnología detectada en cada subdominio.
+#      Los hosts API se saltan completamente.
 #
-#  Guarda en tabla login_forms y notifica por Telegram
+#  Ambas fuentes se verifican en paralelo (20 workers).
 # ============================================================
 
 MODULE_NAME="login_finder"
 MODULE_DESC="Detección de formularios de login"
 
-# ── Rutas conocidas de login a probar siempre ─────────────────
-LOGIN_PATHS=(
-  "/login" "/signin" "/sign-in" "/log-in"
-  "/admin" "/admin/login" "/administrator"
-  "/wp-login.php" "/wp-admin"
-  "/user/login" "/users/login" "/user/sign_in"
-  "/auth" "/auth/login" "/auth/signin"
-  "/account/login" "/accounts/login"
-  "/portal" "/portal/login"
-  "/dashboard" "/dashboard/login"
-  "/panel" "/cpanel" "/control"
-  "/login.php" "/login.asp" "/login.aspx" "/login.jsp"
-  "/api/login" "/api/auth" "/api/v1/auth" "/api/v2/auth"
-  "/.well-known/openid-configuration"
-  "/oauth/authorize" "/oauth2/authorize"
-  "/saml/login" "/saml2/login"
-  "/sso" "/sso/login"
-)
-
-# ── Inicializar tabla en SQLite ───────────────────────────────
 _init_login_table() {
   sqlite3 "$DB_PATH" <<'SQL'
 CREATE TABLE IF NOT EXISTS login_forms (
@@ -44,11 +25,11 @@ CREATE TABLE IF NOT EXISTS login_forms (
   subdomain    TEXT NOT NULL,
   form_action  TEXT,
   form_method  TEXT DEFAULT 'POST',
-  input_fields TEXT,    -- JSON: [{name, type, id}...]
-  login_type   TEXT,    -- password_form | oauth | saml | sso | api_auth
+  input_fields TEXT,
+  login_type   TEXT,
   http_status  INTEGER,
   page_title   TEXT,
-  tech_hints   TEXT,    -- indicios de tecnología (WordPress, Django...)
+  tech_hints   TEXT,
   found_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(domain_id, url)
 );
@@ -56,58 +37,115 @@ CREATE INDEX IF NOT EXISTS idx_login_domain ON login_forms(domain_id);
 SQL
 }
 
+# ── ¿Es un host de API? (no tiene login forms HTML) ──────────
+_is_api_host() {
+  local SUB="$1"
+  echo "$SUB" | grep -qiP '(^|[-.])(api|apis|service|services|backend|gateway|gw|rpc|graphql)([-.:]|$)'
+}
+
+# ── Paths a probar según tech detectada ───────────────────────
+# Solo HTTPS — curl -L sigue redirects de http a https automáticamente.
+_paths_for_subdomain() {
+  local SUB="$1"
+  local DOMAIN_ID="$2"
+
+  # Paths universales (pocos, alta tasa de acierto)
+  local -a PATHS=(
+    "/login" "/signin" "/admin"
+    "/auth/login" "/user/login"
+    "/.well-known/openid-configuration"
+    "/oauth/authorize" "/sso"
+  )
+
+  # Tech desde la tabla technologies (módulo 10)
+  local TECHS
+  TECHS=$(_db_query \
+    "SELECT GROUP_CONCAT(tech_stack,' ') FROM technologies
+     WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUB//\'/\'\'}';" 2>/dev/null)
+
+  # WordPress: detectado por tech O por wp-login en urls ya crawleadas
+  local WP_URLS
+  WP_URLS=$(_db_query \
+    "SELECT COUNT(*) FROM urls
+     WHERE domain_id=${DOMAIN_ID}
+       AND url LIKE '%${SUB//\'/\'\'}%'
+       AND url LIKE '%wp-login%';" 2>/dev/null || echo 0)
+
+  if echo "$TECHS" | grep -qi "wordpress" || [[ "${WP_URLS:-0}" -gt 0 ]]; then
+    PATHS+=("/wp-login.php" "/wp-admin/")
+  fi
+
+  echo "$TECHS" | grep -qi "drupal"           && PATHS+=("/user/login")
+  echo "$TECHS" | grep -qi "joomla"           && PATHS+=("/administrator/")
+  echo "$TECHS" | grep -qi "django"           && PATHS+=("/accounts/login/" "/admin/login/")
+  echo "$TECHS" | grep -qi "rails\|ruby"      && PATHS+=("/users/sign_in")
+  echo "$TECHS" | grep -qi "asp\|\.net"       && PATHS+=("/Account/Login" "/login.aspx")
+  echo "$TECHS" | grep -qi "zendesk"          && PATHS+=("/access/login" "/hc/signin")
+  echo "$TECHS" | grep -qi "shopify"          && PATHS+=("/account/login" "/admin/auth/login")
+  echo "$TECHS" | grep -qi "confluence\|jira" && PATHS+=("/login.action" "/secure/Dashboard.jspa")
+  echo "$TECHS" | grep -qi "jenkins"          && PATHS+=("/j_spring_security_check" "/login")
+  echo "$TECHS" | grep -qi "gitlab"           && PATHS+=("/users/sign_in")
+
+  printf '%s\n' "${PATHS[@]}" | sort -u
+}
+
 # ── Parsear HTML buscando formularios de login ────────────────
 _parse_login_form() {
   local HTML="$1"
-  local BASE_URL="$2"
 
-  # ¿Tiene input type=password?
   echo "$HTML" | grep -qi "type=[\"']password[\"']" || return 1
 
-  # Extraer campos del formulario
-  local FIELDS
-  FIELDS=$(echo "$HTML" | grep -oiP '<input[^>]+>' | grep -iv 'hidden\|submit\|button\|csrf\|token' | head -10)
+  local FIELDS ACTION METHOD TITLE TECH
 
-  local NAMES
-  NAMES=$(echo "$FIELDS" | grep -oiP "name=[\"'][^\"']+[\"']" | sed "s/name=[\"']//;s/[\"']//" | tr '\n' ',' | sed 's/,$//')
+  FIELDS=$(echo "$HTML" \
+    | grep -oiP '<input[^>]+>' \
+    | grep -iv 'hidden\|submit\|button\|csrf\|token' \
+    | grep -oiP "name=[\"'][^\"']+[\"']" \
+    | sed "s/name=[\"']//;s/[\"']//" \
+    | tr '\n' ',' | sed 's/,$//')
 
-  local ACTION
-  ACTION=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi "action=[\"'][^\"']*[\"']" | head -1 | sed "s/action=[\"']//;s/[\"']//" || echo "")
+  ACTION=$(echo "$HTML" \
+    | grep -oiP '<form[^>]+>' \
+    | grep -oi "action=[\"'][^\"']*[\"']" \
+    | head -1 \
+    | sed "s/action=[\"']//;s/[\"']//" || echo "")
 
-  local METHOD
-  METHOD=$(echo "$HTML" | grep -oiP '<form[^>]+>' | grep -oi "method=[\"'][^\"']*[\"']" | head -1 | sed "s/method=[\"']//;s/[\"']//" | tr '[:lower:]' '[:upper:]' || echo "POST")
+  METHOD=$(echo "$HTML" \
+    | grep -oiP '<form[^>]+>' \
+    | grep -oi "method=[\"'][^\"']*[\"']" \
+    | head -1 \
+    | sed "s/method=[\"']//;s/[\"']//" \
+    | tr '[:lower:]' '[:upper:]' || echo "POST")
 
-  # Título de la página
-  local TITLE
-  TITLE=$(echo "$HTML" | grep -oiP '(?<=<title>)[^<]+' | head -1 | tr -d '\n\r' | cut -c1-100)
+  TITLE=$(echo "$HTML" \
+    | grep -oiP '(?<=<title>)[^<]+' \
+    | head -1 | tr -d '\n\r' | cut -c1-100)
 
-  # Detectar tecnología por indicios
-  local TECH=""
+  TECH=""
   echo "$HTML" | grep -qi 'wp-content\|wordpress\|wp-login' && TECH="WordPress"
-  echo "$HTML" | grep -qi 'django\|csrfmiddlewaretoken' && TECH="Django"
-  echo "$HTML" | grep -qi 'laravel\|_token.*csrf' && TECH="Laravel"
-  echo "$HTML" | grep -qi 'rails\|authenticity_token' && TECH="Rails"
-  echo "$HTML" | grep -qi 'joomla' && TECH="Joomla"
-  echo "$HTML" | grep -qi 'drupal' && TECH="Drupal"
+  echo "$HTML" | grep -qi 'django\|csrfmiddlewaretoken'     && TECH="Django"
+  echo "$HTML" | grep -qi 'laravel\|_token.*csrf'           && TECH="Laravel"
+  echo "$HTML" | grep -qi 'rails\|authenticity_token'       && TECH="Rails"
+  echo "$HTML" | grep -qi 'joomla'                          && TECH="Joomla"
+  echo "$HTML" | grep -qi 'drupal'                          && TECH="Drupal"
 
-  echo "${ACTION}|${METHOD}|${NAMES}|${TITLE}|${TECH}"
+  echo "${ACTION}|${METHOD:-POST}|${FIELDS}|${TITLE}|${TECH}"
 }
 
-# ── Analizar una URL ──────────────────────────────────────────
+# ── Verificar una URL ─────────────────────────────────────────
 _check_url() {
   local URL="$1"
   local DOMAIN_ID="$2"
   local PROXY_FLAG="$3"
 
   local SUBDOMAIN
-  SUBDOMAIN=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
+  SUBDOMAIN=$(echo "$URL" | sed 's|https\?://||;s|[:/].*||')
 
-  # GET con curl, siguiendo redirecciones
   local RESPONSE
   RESPONSE=$(curl -sL \
     --max-time 10 \
     --max-filesize 2000000 \
-    -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
+    -A "${SCAN_UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36}" \
     -w "\n###STATUS###%{http_code}" \
     ${PROXY_FLAG} \
     "$URL" 2>/dev/null)
@@ -117,67 +155,57 @@ _check_url() {
   local HTML
   HTML=$(echo "$RESPONSE" | sed '/###STATUS###/d')
 
-  [[ -z "$HTML" || "$HTTP_STATUS" == "000" ]] && return
+  [[ -z "$HTML" || "$HTTP_STATUS" == "000" || "$HTTP_STATUS" == "404" ]] && return
 
-  # ── Detectar tipo de endpoint ─────────────────────────────
+  # Descartar URLs con template literals de JS (${var}) — no son URLs reales
+  echo "$URL" | grep -qP '\$\{' && return
+
   local LOGIN_TYPE=""
 
-  # OAuth / OpenID
-  if echo "$URL" | grep -qiP '/oauth|/openid|\.well-known'; then
+  # OAuth: solo flujos de autorización reales, no rutas de API que contengan "oauth"
+  if echo "$URL" | grep -qiP '/(oauth2?/authorize|connect/authorize|openid-connect/auth|\.well-known/openid)'; then
     LOGIN_TYPE="oauth"
-  # SAML
-  elif echo "$URL" | grep -qiP '/saml'; then
+  elif echo "$URL" | grep -qiP '/saml/(sso|login|auth|consume|acs)'; then
     LOGIN_TYPE="saml"
-  # SSO
-  elif echo "$URL" | grep -qiP '/sso'; then
+  elif echo "$URL" | grep -qiP '/(sso$|sso/login|sso/auth)'; then
     LOGIN_TYPE="sso"
-  # API auth (responde JSON)
   elif echo "$HTML" | grep -qi '"token"\|"access_token"\|"jwt"' && \
        echo "$URL" | grep -qiP '/api/'; then
     LOGIN_TYPE="api_auth"
-  # Formulario con password
   elif echo "$HTML" | grep -qi "type=[\"']password[\"']"; then
     LOGIN_TYPE="password_form"
   else
-    return   # No es un login
+    return
   fi
 
-  # ── Parsear detalles del formulario ──────────────────────
   local ACTION METHOD FIELDS TITLE TECH
   if [[ "$LOGIN_TYPE" == "password_form" ]]; then
     local PARSED
-    PARSED=$(_parse_login_form "$HTML" "$URL") || return
+    PARSED=$(_parse_login_form "$HTML") || return
     IFS='|' read -r ACTION METHOD FIELDS TITLE TECH <<< "$PARSED"
   else
     TITLE=$(echo "$HTML" | grep -oiP '(?<=<title>)[^<]+' | head -1 | tr -d '\n\r' | cut -c1-100)
-    FIELDS=""
-    ACTION=""
-    METHOD="GET"
-    TECH=""
+    FIELDS=""; ACTION=""; METHOD="GET"; TECH=""
   fi
 
-  # ── Guardar en DB ─────────────────────────────────────────
   local URL_ESC="${URL//\'/\'\'}"
   local SUB_ESC="${SUBDOMAIN//\'/\'\'}"
-  local ACT_ESC="${ACTION//\'/\'\'}"
-  local FLD_ESC="${FIELDS//\'/\'\'}"
-  local TTL_ESC="${TITLE//\'/\'\'}"
-  local TCH_ESC="${TECH//\'/\'\'}"
 
   local IS_NEW
-  IS_NEW=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM login_forms WHERE domain_id=${DOMAIN_ID} AND url='${URL_ESC}';" 2>/dev/null)
+  IS_NEW=$(_db_query \
+    "SELECT COUNT(*) FROM login_forms
+     WHERE domain_id=${DOMAIN_ID} AND url='${URL_ESC}';" 2>/dev/null)
 
-  sqlite3 "$DB_PATH" \
-    "INSERT OR IGNORE INTO login_forms
-     (domain_id,url,subdomain,form_action,form_method,input_fields,login_type,http_status,page_title,tech_hints)
-     VALUES(${DOMAIN_ID},'${URL_ESC}','${SUB_ESC}','${ACT_ESC}','${METHOD}','${FLD_ESC}','${LOGIN_TYPE}',${HTTP_STATUS:-0},'${TTL_ESC}','${TCH_ESC}');" \
-    2>/dev/null || true
+  _db "INSERT OR IGNORE INTO login_forms
+    (domain_id,url,subdomain,form_action,form_method,input_fields,login_type,http_status,page_title,tech_hints)
+    VALUES(${DOMAIN_ID},'${URL_ESC}','${SUB_ESC}','${ACTION//\'/\'\'}','${METHOD}',
+           '${FIELDS//\'/\'\'}','${LOGIN_TYPE}',${HTTP_STATUS:-0},
+           '${TITLE//\'/\'\'}','${TECH//\'/\'\'}');" 2>/dev/null || true
 
-  # Notificar si es nuevo
   if [[ "${IS_NEW:-0}" == "0" ]]; then
     local EMOJI="🔐"
-    [[ "$LOGIN_TYPE" == "oauth" ]] && EMOJI="🔑"
-    [[ "$LOGIN_TYPE" == "saml"  ]] && EMOJI="🏢"
+    [[ "$LOGIN_TYPE" == "oauth"    ]] && EMOJI="🔑"
+    [[ "$LOGIN_TYPE" == "saml"     ]] && EMOJI="🏢"
     [[ "$LOGIN_TYPE" == "api_auth" ]] && EMOJI="🔌"
 
     log_warn "$EMOJI Login form [$LOGIN_TYPE]: $URL"
@@ -194,8 +222,6 @@ ${TITLE:+📄 Título: ${TITLE}}
     db_add_finding "$DOMAIN_ID" "login_form" "info" \
       "$URL" "$LOGIN_TYPE" "${TECH:+$TECH — }${TITLE}"
   fi
-
-  echo "$LOGIN_TYPE"
 }
 
 # ── Función principal ─────────────────────────────────────────
@@ -208,12 +234,10 @@ module_run() {
 
   _init_login_table
 
-  # ── Proxy ────────────────────────────────────────────────
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
-  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}" && \
-    log_info "Peticiones DOM enrutadas por ${PROXY_TOOL}"
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
 
   local ALIVE="$OUT_DIR/subs_alive.txt"
   local URLS_RAW="$OUT_DIR/urls_raw.txt"
@@ -223,61 +247,95 @@ module_run() {
     return
   fi
 
-  # ── Construir lista de URLs a analizar ────────────────────
   local CHECK_LIST="$OUT_DIR/.login_check.txt"
   > "$CHECK_LIST"
 
-  # 1. Rutas conocidas sobre cada subdominio alive
+  # ── Fuente 1: URLs ya descubiertas por el crawler ─────────
+  # El crawler ya visitó estas páginas — alta precisión, sin trabajo extra.
+  local LOGIN_PATTERN='/(login|signin|sign-in|log-in|auth|admin|portal|dashboard|sso|oauth|saml|wp-login|user.login|account.login|access.login|j_spring|users.sign)'
+
+  _db_query \
+    "SELECT DISTINCT url FROM urls
+     WHERE domain_id=${DOMAIN_ID}
+       AND (url LIKE '%/login%' OR url LIKE '%/signin%'
+            OR url LIKE '%/auth%'  OR url LIKE '%/admin%'
+            OR url LIKE '%/sso%'   OR url LIKE '%/oauth%'
+            OR url LIKE '%/saml%'  OR url LIKE '%/wp-login%'
+            OR url LIKE '%/user/login%' OR url LIKE '%/access/login%'
+            OR url LIKE '%/users/sign%' OR url LIKE '%/account/login%')
+       AND url NOT LIKE '%.js' AND url NOT LIKE '%.css'
+       AND url NOT LIKE '%.png' AND url NOT LIKE '%author%'
+       AND url NOT LIKE '%\${%'
+     ORDER BY first_seen DESC LIMIT 500;" \
+    2>/dev/null >> "$CHECK_LIST" || true
+
+  if [[ -s "$URLS_RAW" ]]; then
+    grep -iP "$LOGIN_PATTERN" "$URLS_RAW" \
+      | grep -ivP '\.(js|css|png|jpg|gif|svg|ico)(\?|$)' \
+      | grep -ivP '/author/' \
+      | grep -vP '\$\{' \
+      >> "$CHECK_LIST" 2>/dev/null || true
+  fi
+
+  local FROM_CRAWLER
+  FROM_CRAWLER=$(wc -l < "$CHECK_LIST" | tr -d ' ')
+
+  # ── Fuente 2: Probing guiado por tech (solo HTTPS, sin hosts API) ─
+  local PROBED_SUBS=0
+  local SKIPPED_API=0
+
   while IFS= read -r SUB; do
     [[ -z "$SUB" ]] && continue
-    for PATH in "${LOGIN_PATHS[@]}"; do
-      echo "https://${SUB}${PATH}" >> "$CHECK_LIST"
-      echo "http://${SUB}${PATH}"  >> "$CHECK_LIST"
-    done
-  done < "$ALIVE"
 
-  # 2. URLs ya descubiertas que parecen login
-  if [[ -s "$URLS_RAW" ]]; then
-    grep -iP '/(login|signin|sign.in|log.in|auth|admin|portal|dashboard|panel|sso|oauth|saml|account)' \
-      "$URLS_RAW" >> "$CHECK_LIST" 2>/dev/null || true
-  fi
+    if _is_api_host "$SUB"; then
+      ((SKIPPED_API++))
+      continue
+    fi
+
+    ((PROBED_SUBS++))
+    while IFS= read -r LPATH; do
+      echo "https://${SUB}${LPATH}" >> "$CHECK_LIST"
+    done < <(_paths_for_subdomain "$SUB" "$DOMAIN_ID")
+
+  done < "$ALIVE"
 
   sort -u "$CHECK_LIST" -o "$CHECK_LIST"
   local TOTAL
   TOTAL=$(wc -l < "$CHECK_LIST" | tr -d ' ')
-  log_info "Analizando $TOTAL URLs en busca de login forms..."
 
-  local FOUND=0
-  local CHECKED=0
+  log_info "Targets: $FROM_CRAWLER del crawler + probing tech-guided ($PROBED_SUBS hosts web, $SKIPPED_API API saltados) = $TOTAL únicos"
+  log_info "Verificando $TOTAL URLs (20 workers paralelos)..."
+
+  # ── Verificación paralela ────────────────────────────────
+  local MAX_WORKERS="${LOGIN_PARALLEL:-20}"
+  local PIDS=()
 
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
-    ((CHECKED++))
-
-    # Progreso cada 50 URLs
-    (( CHECKED % 50 == 0 )) && log_info "[$CHECKED/$TOTAL] analizadas..."
-
-    local RESULT
-    RESULT=$(_check_url "$URL" "$DOMAIN_ID" "$CURL_PROXY")
-    [[ -n "$RESULT" ]] && ((FOUND++))
-
+    (
+      _check_url "$URL" "$DOMAIN_ID" "$CURL_PROXY" > /dev/null
+    ) &
+    PIDS+=($!)
+    if [[ ${#PIDS[@]} -ge $MAX_WORKERS ]]; then
+      wait "${PIDS[0]}" 2>/dev/null || true
+      PIDS=("${PIDS[@]:1}")
+    fi
   done < "$CHECK_LIST"
+  wait "${PIDS[@]}" 2>/dev/null || true
 
   rm -f "$CHECK_LIST"
 
-  # ── Resumen ───────────────────────────────────────────────
-  local TOTAL_DB
-  TOTAL_DB=$(sqlite3 "$DB_PATH" \
+  local FOUND
+  FOUND=$(_db_query \
     "SELECT COUNT(*) FROM login_forms WHERE domain_id=${DOMAIN_ID};" 2>/dev/null || echo 0)
 
-  if [[ "$FOUND" -gt 0 ]]; then
+  if [[ "${FOUND:-0}" -gt 0 ]]; then
     _telegram_send "🔐 *Login Finder — Resumen*
 🌐 \`${DOMAIN}\`
-🔎 URLs analizadas: ${CHECKED}
+🔎 URLs verificadas: ${TOTAL}
 🔐 Login forms encontrados: ${FOUND}
-📊 Total en DB: ${TOTAL_DB}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
   fi
 
-  log_ok "$MODULE_DESC completado: $FOUND login forms en $CHECKED URLs analizadas"
+  log_ok "$MODULE_DESC completado: $FOUND login forms en $TOTAL URLs analizadas"
 }

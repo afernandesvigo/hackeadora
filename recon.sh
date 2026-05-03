@@ -131,10 +131,10 @@ run_module() {
   local MOD_EXIT=0
   if [[ "${WATCHDOG_ENABLED:-true}" == "true" ]] && type watchdog_run &>/dev/null 2>&1; then
     watchdog_run "$MOD_FILE" "$MOD_TIMEOUT" \
-      bash -c "source '$MOD_PATH' && module_run '$DOMAIN' '$DOMAIN_ID' '$OUT_DIR'"
+      bash -c "source '$MOD_PATH' && module_run '${TARGET_SUB:-$DOMAIN}' '$DOMAIN_ID' '$OUT_DIR'"
     MOD_EXIT=$?
   else
-    module_run "$DOMAIN" "$DOMAIN_ID" "$OUT_DIR"
+    module_run "${TARGET_SUB:-$DOMAIN}" "$DOMAIN_ID" "$OUT_DIR"
     MOD_EXIT=$?
   fi
 
@@ -169,7 +169,8 @@ _setup_single_target() {
   if command -v httpx &>/dev/null; then
     log_info "Verificando $SUB con httpx..."
     local HTTPX_INFO
-    HTTPX_INFO=$(echo "$SUB" | httpx -silent -json -status-code -title -tech-detect -ip 2>/dev/null | head -1)
+    HTTPX_INFO=$(echo "$SUB" | httpx -silent -json -status-code -title -tech-detect -ip \
+      ${SCAN_UA:+-H "User-Agent: ${SCAN_UA}"} 2>/dev/null | head -1)
     if [[ -n "$HTTPX_INFO" ]]; then
       local HTTP_STATUS IP TITLE
       HTTP_STATUS=$(echo "$HTTPX_INFO" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('status_code',''))" 2>/dev/null)
@@ -178,6 +179,23 @@ _setup_single_target() {
       db_update_subdomain_status "$DOMAIN_ID" "$SUB" "alive" "$HTTP_STATUS" "$IP" "$TITLE"
       log_ok "$SUB → HTTP $HTTP_STATUS ${IP:+($IP)} ${TITLE:+\"$TITLE\"}"
       echo "$HTTPX_INFO" > "$OUT_DIR/subs_httpx.json"
+
+      # Abortar si Cloudflare Bot Management bloquea el target raíz
+      local TECH_LIST
+      TECH_LIST=$(echo "$HTTPX_INFO" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(' '.join(d.get('tech',[])))" 2>/dev/null)
+      if echo "$TECH_LIST" | grep -qi "Cloudflare Bot Management"; then
+        # Confirmar con body check
+        local CF_BODY
+        CF_BODY=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 "https://${SUB}/" 2>/dev/null | head -c 1000)
+        if echo "$CF_BODY" | grep -qi "Just a moment\|cf-browser-verification\|cf_chl\|Checking your browser"; then
+          log_warn "⛔ Cloudflare Bot Management activo en $SUB — scan abortado (target inaccesible para herramientas automatizadas)"
+          _telegram_send "⛔ *Scan abortado*
+🎯 Target: \`${SUB}\`
+🚧 Cloudflare Bot Management bloquea todo tráfico automatizado
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+          exit 0
+        fi
+      fi
     fi
   fi
 
@@ -211,17 +229,28 @@ _run_pipeline() {
     run_module "11_js_analyzer"
     run_module "12_login_finder"
     run_module "13_port_scan"
-    run_module "15_param_discovery"
     run_module "19_auth_crawler"
-    run_module "20_smart_scan"
-    run_module "21_business_logic"
-    run_module "22_cors_check"
-    run_module "23_403_bypass"
-    run_module "24_http_smuggling"
-    run_module "25_cms_scan"
-    run_module "26_path_confusion"
-    run_module "27_blind_xss"
-    run_module "28_cache_attacks"
+    run_module "15_param_discovery"
+
+    # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
+    log_phase "Fase de testing en paralelo (módulos 20-31)..."
+    ( run_module "20_smart_scan"    ) & _PID_20=$!
+    ( run_module "21_business_logic") & _PID_21=$!
+    ( run_module "22_cors_check"    ) & _PID_22=$!
+    ( run_module "23_403_bypass"    ) & _PID_23=$!
+    ( run_module "24_http_smuggling") & _PID_24=$!
+    ( run_module "25_cms_scan"      ) & _PID_25=$!
+    ( run_module "26_path_confusion") & _PID_26=$!
+    ( run_module "27_blind_xss"     ) & _PID_27=$!
+    ( run_module "28_cache_attacks" ) & _PID_28=$!
+    ( run_module "29_api_auth_scan" ) & _PID_29=$!
+    ( run_module "30_spring_config" ) & _PID_30=$!
+    ( run_module "31_keycloak_enum" ) & _PID_31=$!
+    wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
+         $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
+         $_PID_30 $_PID_31 2>/dev/null || true
+    log_ok "Testing paralelo completado"
+
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
 
@@ -245,20 +274,30 @@ _run_pipeline() {
     run_module "12_login_finder"
     run_module "13_port_scan"
     BREACH_FORCE="${FORCE_BREACH:-false}" run_module "14_breach_lookup"
-    run_module "15_param_discovery"
     run_module "16_github_dorking"
     run_module "17_cloud_enum"
     run_module "18_asn_discovery"
     run_module "19_auth_crawler"
-    run_module "20_smart_scan"
-    run_module "21_business_logic"
-    run_module "22_cors_check"
-    run_module "23_403_bypass"
-    run_module "24_http_smuggling"
-    run_module "25_cms_scan"
-    run_module "26_path_confusion"
-    run_module "27_blind_xss"
-    run_module "28_cache_attacks"
+    run_module "15_param_discovery"
+
+    # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
+    log_phase "Fase de testing en paralelo (módulos 20-31)..."
+    ( run_module "20_smart_scan"    ) & _PID_20=$!
+    ( run_module "21_business_logic") & _PID_21=$!
+    ( run_module "22_cors_check"    ) & _PID_22=$!
+    ( run_module "23_403_bypass"    ) & _PID_23=$!
+    ( run_module "24_http_smuggling") & _PID_24=$!
+    ( run_module "25_cms_scan"      ) & _PID_25=$!
+    ( run_module "26_path_confusion") & _PID_26=$!
+    ( run_module "27_blind_xss"     ) & _PID_27=$!
+    ( run_module "28_cache_attacks" ) & _PID_28=$!
+    ( run_module "29_api_auth_scan" ) & _PID_29=$!
+    ( run_module "30_spring_config" ) & _PID_30=$!
+    ( run_module "31_keycloak_enum" ) & _PID_31=$!
+    wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
+         $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
+         $_PID_30 $_PID_31 2>/dev/null || true
+    log_ok "Testing paralelo completado"
 
     # Nuclei al final — con todos los subdominios y URLs ya descubiertos
     run_module "04_nuclei_scan"

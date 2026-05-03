@@ -39,18 +39,17 @@ module_run() {
   COUNT=$(wc -l < "$ALIVE" | tr -d ' ')
   log_info "Capturando screenshots de $COUNT subdominios..."
 
-  gowitness file \
+  gowitness scan file \
     -f "$TARGETS" \
-    --screenshot-path "$SHOTS_DIR" \
-    --threads 4 \
-    --timeout 10 \
-    --disable-db \
+    -s "$SHOTS_DIR" \
+    -t 4 \
+    -T 10 \
     2>/dev/null \
   || log_warn "gowitness: algunos errores (normal para hosts sin HTTP)"
 
   # Guardar metadata en DB: añadir ruta de screenshot al subdominio
   local SHOT_COUNT
-  SHOT_COUNT=$(find "$SHOTS_DIR" -name "*.png" 2>/dev/null | wc -l | tr -d ' ')
+  SHOT_COUNT=$(find "$SHOTS_DIR" -name "*.jpeg" -o -name "*.png" 2>/dev/null | wc -l | tr -d ' ')
 
   # Actualizar campo tech en subdominio con ruta del screenshot
   if command -v sqlite3 &>/dev/null && [[ "$SHOT_COUNT" -gt 0 ]]; then

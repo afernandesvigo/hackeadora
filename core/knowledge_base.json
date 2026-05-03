@@ -2,7 +2,7 @@
   "_meta": {
     "version": "1.0",
     "created": "2025-01-01",
-    "last_updated": "2026-04-27",
+    "last_updated": "2026-05-02",
     "sources": [
       "PortSwigger Top 10 Web Hacking Techniques 2023-2025",
       "BlackHat USA 2023, 2024, 2025",
@@ -19,10 +19,10 @@
       "h1_frequency": "very_high",
       "h1_avg_bounty_usd": 2500,
       "h1_top_reports": [
-        "SSRF on duckduckgo.com/iu/ \u2014 161 upvotes",
-        "Blind SSRF on errors.hackerone.net via Sentry \u2014 $3500",
-        "SSRF in Autodesk Rendering \u2192 account takeover \u2014 $0",
-        "External SSRF via video upload FFmpeg HLS \u2014 TikTok $2727"
+        "SSRF on duckduckgo.com/iu/ — 161 upvotes",
+        "Blind SSRF on errors.hackerone.net via Sentry — $3500",
+        "SSRF in Autodesk Rendering → account takeover — $0",
+        "External SSRF via video upload FFmpeg HLS — TikTok $2727"
       ],
       "trigger_params": [
         "url",
@@ -52,7 +52,37 @@
         "picture",
         "request",
         "api",
-        "service"
+        "service",
+        "width",
+        "height",
+        "w",
+        "h",
+        "size",
+        "resize",
+        "scale",
+        "thumb",
+        "thumbnail",
+        "avatar",
+        "photo",
+        "pic",
+        "cover",
+        "banner",
+        "icon",
+        "background",
+        "media",
+        "attachment",
+        "import",
+        "export",
+        "endpoint",
+        "server",
+        "domain",
+        "origin",
+        "referer",
+        "href",
+        "action",
+        "next",
+        "data",
+        "source"
       ],
       "trigger_paths": [
         "/proxy",
@@ -120,10 +150,10 @@
       "h1_frequency": "very_high",
       "h1_avg_bounty_usd": 1500,
       "h1_top_reports": [
-        "Multiple IDORs in family pairing API \u2014 TikTok 103 upvotes",
-        "IDOR view support tickets any user \u2014 TikTok $2500",
-        "Full account takeover via IDOR \u2014 $1000",
-        "IDOR in upload videos IBM \u2014 55 upvotes"
+        "Multiple IDORs in family pairing API — TikTok 103 upvotes",
+        "IDOR view support tickets any user — TikTok $2500",
+        "Full account takeover via IDOR — $1000",
+        "IDOR in upload videos IBM — 55 upvotes"
       ],
       "trigger_params": [
         "id",
@@ -147,7 +177,44 @@
         "profile_id",
         "report_id",
         "team_id",
-        "org_id"
+        "org_id",
+        "no",
+        "num",
+        "nr",
+        "seq",
+        "idx",
+        "index",
+        "pos",
+        "ref",
+        "ref_id",
+        "key",
+        "guid",
+        "uuid",
+        "hash",
+        "code",
+        "token",
+        "slug",
+        "handle",
+        "user",
+        "member",
+        "member_id",
+        "account",
+        "client",
+        "client_id",
+        "project",
+        "project_id",
+        "task",
+        "task_id",
+        "group",
+        "group_id",
+        "chat",
+        "chat_id",
+        "page",
+        "pageid",
+        "article",
+        "article_id",
+        "node",
+        "node_id"
       ],
       "trigger_paths": [
         "/api/",
@@ -206,10 +273,10 @@
       "h1_frequency": "very_high",
       "h1_avg_bounty_usd": 1200,
       "h1_top_reports": [
-        "Stored XSS developer.uber.com \u2014 $7500",
-        "Blind Stored XSS \u2192 PII leakage Acronis \u2014 $150",
-        "Stored XSS GitLab Wiki via Banzai \u2014 $4500",
-        "Arbitrary File Upload \u2192 Stored XSS \u2014 Visma $250"
+        "Stored XSS developer.uber.com — $7500",
+        "Blind Stored XSS → PII leakage Acronis — $150",
+        "Stored XSS GitLab Wiki via Banzai — $4500",
+        "Arbitrary File Upload → Stored XSS — Visma $250"
       ],
       "trigger_params": [
         "name",
@@ -236,7 +303,51 @@
         "feedback",
         "review",
         "tag",
-        "label"
+        "label",
+        "screen_name",
+        "nick",
+        "nickname",
+        "handle",
+        "alias",
+        "fullname",
+        "headline",
+        "summary",
+        "bio_text",
+        "signature",
+        "tagline",
+        "caption",
+        "alt",
+        "placeholder",
+        "hint",
+        "help",
+        "info",
+        "error",
+        "msg",
+        "alert",
+        "flash",
+        "notice",
+        "warn",
+        "input",
+        "value",
+        "val",
+        "data",
+        "param",
+        "arg",
+        "keyword",
+        "keywords",
+        "term",
+        "terms",
+        "filter",
+        "q1",
+        "q2",
+        "q3",
+        "search_term",
+        "buscar",
+        "cerca",
+        "nom",
+        "name_first",
+        "name_last",
+        "full_name"
       ],
       "trigger_paths": [
         "/profile",
@@ -283,10 +394,10 @@
       "h1_frequency": "high",
       "h1_avg_bounty_usd": 2000,
       "h1_top_reports": [
-        "Blind SQLi serial_no param \u2014 Razer $1000",
-        "SQL Injection delivery-club.ru ClickHouse \u2014 Mail.ru $5000",
-        "Time-based blind SQLi \u2014 DoD 50 upvotes",
-        "SQLi in CVE Discovery Search \u2014 HackerOne 85 upvotes"
+        "Blind SQLi serial_no param — Razer $1000",
+        "SQL Injection delivery-club.ru ClickHouse — Mail.ru $5000",
+        "Time-based blind SQLi — DoD 50 upvotes",
+        "SQLi in CVE Discovery Search — HackerOne 85 upvotes"
       ],
       "trigger_params": [
         "id",
@@ -312,7 +423,48 @@
         "key",
         "code",
         "token",
-        "ref"
+        "ref",
+        "ext",
+        "count",
+        "num",
+        "number",
+        "total",
+        "rows",
+        "per_page",
+        "limit_start",
+        "start",
+        "end",
+        "begin",
+        "since",
+        "until",
+        "year",
+        "month",
+        "day",
+        "after",
+        "before",
+        "price",
+        "amount",
+        "qty",
+        "quantity",
+        "lang",
+        "language",
+        "country",
+        "region",
+        "city",
+        "brand",
+        "model",
+        "version",
+        "ver",
+        "parent",
+        "parent_id",
+        "group",
+        "group_id",
+        "channel",
+        "tag",
+        "tags",
+        "keyword",
+        "q1",
+        "q2"
       ],
       "trigger_paths": [
         "/search",
@@ -361,9 +513,9 @@
       "h1_frequency": "high",
       "h1_avg_bounty_usd": 300,
       "h1_top_reports": [
-        "Open Redirect dev.twitter.com \u2014 $1120",
+        "Open Redirect dev.twitter.com — $1120",
         "Top 25 Open Redirect bug bounty reports compilation",
-        "Open Redirect chained with OAuth \u2192 account takeover"
+        "Open Redirect chained with OAuth → account takeover"
       ],
       "trigger_params": [
         "redirect",
@@ -389,7 +541,35 @@
         "successUrl",
         "cancelUrl",
         "referer",
-        "ref"
+        "ref",
+        "ext",
+        "external",
+        "out",
+        "exit",
+        "away",
+        "open",
+        "jump",
+        "launch",
+        "view",
+        "navigate",
+        "go_to",
+        "goto_url",
+        "after",
+        "before",
+        "from",
+        "source",
+        "origin",
+        "ret",
+        "return_url",
+        "redirect_to",
+        "redir",
+        "location",
+        "href",
+        "next_url",
+        "success",
+        "failure",
+        "error",
+        "action"
       ],
       "trigger_paths": [
         "/login",
@@ -434,7 +614,7 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3000,
       "h1_top_reports": [
-        "Reflected XSS and SSTI in HubSpot CMSes \u2014 50 upvotes",
+        "Reflected XSS and SSTI in HubSpot CMSes — 50 upvotes",
         "SSTI leading to RCE in multiple platforms",
         "Template injection via user-controlled input"
       ],
@@ -528,7 +708,38 @@
         "lang",
         "locale",
         "theme",
-        "skin"
+        "skin",
+        "ext",
+        "module",
+        "component",
+        "controller",
+        "action",
+        "route",
+        "section",
+        "area",
+        "article",
+        "entry",
+        "post",
+        "show",
+        "render",
+        "display",
+        "layout",
+        "partial",
+        "block",
+        "tpl",
+        "tmpl",
+        "tplname",
+        "content_type",
+        "script",
+        "src",
+        "source",
+        "import",
+        "resource",
+        "ref",
+        "conf",
+        "config",
+        "ini",
+        "cfg"
       ],
       "trigger_paths": [
         "/download",
@@ -577,8 +788,8 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 500,
       "h1_top_reports": [
-        "CORS misconfiguration leaking internal API \u2014 multiple programs",
-        "CORS + credentials \u2192 account takeover chain",
+        "CORS misconfiguration leaking internal API — multiple programs",
+        "CORS + credentials → account takeover chain",
         "Wildcard CORS on sensitive endpoint"
       ],
       "trigger_paths": [
@@ -624,8 +835,8 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 400,
       "h1_top_reports": [
-        "Host header injection \u2192 password reset poisoning",
-        "X-Forwarded-Host injection \u2192 cache poisoning",
+        "Host header injection → password reset poisoning",
+        "X-Forwarded-Host injection → cache poisoning",
         "Host injection in email links"
       ],
       "trigger_paths": [
@@ -673,10 +884,10 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 500,
       "h1_top_reports": [
-        "CSRF protection bypass GitHub Enterprise \u2014 $10000",
-        "Slack integration lacks CSRF \u2014 HackerOne $2500",
-        "Site-wide CSRF glassdoor.com \u2014 162 upvotes",
-        "CSRF leads to stored self-XSS \u2014 Imgur"
+        "CSRF protection bypass GitHub Enterprise — $10000",
+        "Slack integration lacks CSRF — HackerOne $2500",
+        "Site-wide CSRF glassdoor.com — 162 upvotes",
+        "CSRF leads to stored self-XSS — Imgur"
       ],
       "trigger_paths": [
         "/account/settings",
@@ -716,7 +927,7 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 2000,
       "h1_top_reports": [
-        "XXE via SVG upload \u2192 file read",
+        "XXE via SVG upload → file read",
         "XXE in SAML authentication",
         "XXE in Excel/DOCX import functionality"
       ],
@@ -770,10 +981,10 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 1500,
       "h1_top_reports": [
-        "Arbitrary File Upload \u2192 Stored XSS \u2014 Visma $250, 245 upvotes",
-        "Unrestricted File Upload \u2192 RCE Starbucks \u2014 243 upvotes",
-        "File Upload \u2192 RCE \u2014 HackerOne 32 upvotes",
-        "SVG upload \u2192 Stored XSS \u2014 multiple programs"
+        "Arbitrary File Upload → Stored XSS — Visma $250, 245 upvotes",
+        "Unrestricted File Upload → RCE Starbucks — 243 upvotes",
+        "File Upload → RCE — HackerOne 32 upvotes",
+        "SVG upload → Stored XSS — multiple programs"
       ],
       "trigger_paths": [
         "/upload",
@@ -826,9 +1037,9 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 1000,
       "h1_top_reports": [
-        "GraphQL introspection exposed \u2014 multiple programs",
+        "GraphQL introspection exposed — multiple programs",
         "GraphQL IDOR via field manipulation",
-        "GraphQL batch attack \u2192 rate limit bypass"
+        "GraphQL batch attack → rate limit bypass"
       ],
       "trigger_paths": [
         "/graphql",
@@ -873,9 +1084,9 @@
       "h1_frequency": "low",
       "h1_avg_bounty_usd": 2000,
       "h1_top_reports": [
-        "Web Cache Poisoning \u2192 XSS and DoS \u2014 Glassdoor 71 upvotes",
-        "XSS and cache poisoning via upload.twitter.com \u2014 $2520",
-        "Shopify Web Cache Deception \u2192 CSRF tokens leakage \u2014 $800"
+        "Web Cache Poisoning → XSS and DoS — Glassdoor 71 upvotes",
+        "XSS and cache poisoning via upload.twitter.com — $2520",
+        "Shopify Web Cache Deception → CSRF tokens leakage — $800"
       ],
       "trigger_paths": [
         "/",
@@ -930,10 +1141,10 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 2000,
       "h1_top_reports": [
-        "Reflected XSS in OAuth2 login flow \u2014 LINE $1989",
-        "CSRF on Periscope Web OAuth \u2014 Twitter 72 upvotes",
+        "Reflected XSS in OAuth2 login flow — LINE $1989",
+        "CSRF on Periscope Web OAuth — Twitter 72 upvotes",
         "OAuth token leak via Referer header",
-        "OAuth state parameter not validated \u2192 CSRF"
+        "OAuth state parameter not validated → CSRF"
       ],
       "trigger_paths": [
         "/oauth",
@@ -970,11 +1181,11 @@
     },
     {
       "id": "REACT2SHELL",
-      "name": "React2Shell \u2014 Next.js RSC RCE",
+      "name": "React2Shell — Next.js RSC RCE",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 5000,
       "h1_top_reports": [
-        "CVE-2025-55182 / CVE-2025-66478 \u2014 RCE en Next.js React Server Components",
+        "CVE-2025-55182 / CVE-2025-66478 — RCE en Next.js React Server Components",
         "react2shell PoC: github.com/shamo0/react2shell-PoC"
       ],
       "trigger_techs": [
@@ -1013,8 +1224,8 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 1500,
       "h1_top_reports": [
-        "Orange Tsai \u2014 BlackHat USA 2018: Breaking Parser Logic",
-        "Nginx alias misconfiguration \u2192 path traversal un nivel"
+        "Orange Tsai — BlackHat USA 2018: Breaking Parser Logic",
+        "Nginx alias misconfiguration → path traversal un nivel"
       ],
       "trigger_techs": [
         "nginx",
@@ -1052,7 +1263,7 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3000,
       "h1_top_reports": [
-        "Orange Tsai \u2014 BlackHat USA 2024: Confusion Attacks",
+        "Orange Tsai — BlackHat USA 2024: Confusion Attacks",
         "CVE-2024-38475/38476/38477/38473/38474/39573"
       ],
       "trigger_techs": [
@@ -1090,7 +1301,7 @@
       "h1_avg_bounty_usd": 4000,
       "h1_top_reports": [
         "CVE-2025-24813: security checker ve /app/user/, Tomcat procesa ..;/ como traversal",
-        "Explotable en Tomcat con configuraci\u00f3n no-default de URL parsing"
+        "Explotable en Tomcat con configuración no-default de URL parsing"
       ],
       "trigger_techs": [
         "Tomcat",
@@ -1126,7 +1337,7 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 5000,
       "h1_top_reports": [
-        "CVE-2025-55752: normalizaci\u00f3n antes de decode bypasea WEB-INF/META-INF",
+        "CVE-2025-55752: normalización antes de decode bypasea WEB-INF/META-INF",
         "Afecta Tomcat 8.5.6-8.5.100, 9.0.0.M11-9.0.108, 10.1.0-M1-10.1.44, 11.0.0-M1-11.0.10"
       ],
       "trigger_techs": [
@@ -1157,7 +1368,7 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3000,
       "h1_top_reports": [
-        "CVE-2024-38819: WebMvc.fn/WebFlux.fn con FileSystemResource \u2192 path traversal",
+        "CVE-2024-38819: WebMvc.fn/WebFlux.fn con FileSystemResource → path traversal",
         "Afecta Spring Framework 5.3.0-5.3.40, 6.0.0-6.0.24, 6.1.0-6.1.13"
       ],
       "trigger_techs": [
@@ -1194,8 +1405,8 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 2000,
       "h1_top_reports": [
-        "Web Cache Poisoning \u2192 XSS Glassdoor \u2014 71 upvotes $2000+",
-        "Cache poisoning via X-Forwarded-Host \u2014 Twitter $2520",
+        "Web Cache Poisoning → XSS Glassdoor — 71 upvotes $2000+",
+        "Cache poisoning via X-Forwarded-Host — Twitter $2520",
         "PortSwigger BlackHat 2024: Gotta Cache em all"
       ],
       "trigger_response_hints": [
@@ -1237,8 +1448,8 @@
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 1500,
       "h1_top_reports": [
-        "WCD PayPal \u2014 datos de cuenta expuestos (Omer Gil 2017)",
-        "WCD organizaci\u00f3n info disclosure \u2014 $650 (2024)",
+        "WCD PayPal — datos de cuenta expuestos (Omer Gil 2017)",
+        "WCD organización info disclosure — $650 (2024)",
         "PortSwigger BlackHat 2024: delimiter confusion attacks"
       ],
       "trigger_response_hints": [
@@ -1273,8 +1484,8 @@
     },
     {
       "id": "COOKIE_TOSSING_OAUTH",
-      "name": "Cookie Tossing \u2014 OAuth Flow Hijack",
-      "conference": "PortSwigger Top 10 2024 #10 \u2014 Elliot Ward",
+      "name": "Cookie Tossing — OAuth Flow Hijack",
+      "conference": "PortSwigger Top 10 2024 #10 — Elliot Ward",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3000,
       "summary": "XSS en subdominio irrelevante (ej: static.empresa.com) permite plantar cookies en el dominio padre (.empresa.com). Si el flujo OAuth usa cookies para el state parameter, un atacante puede secuestrar el callback y obtener el token.",
@@ -1290,7 +1501,7 @@
         "/login/oauth"
       ],
       "detection": [
-        "Buscar XSS en subdominios (ya lo hace m\u00f3dulo smart_scan)",
+        "Buscar XSS en subdominios (ya lo hace módulo smart_scan)",
         "Verificar si el state de OAuth se almacena en cookie",
         "Comprobar si la cookie no tiene Domain restrictivo"
       ],
@@ -1311,8 +1522,8 @@
     },
     {
       "id": "SQL_INJECTION_PROTOCOL_LEVEL",
-      "name": "SQL Injection at Protocol Level \u2014 Binary Smuggling",
-      "conference": "DEF CON 32 2024 \u2014 Paul Gerste (Snyk)",
+      "name": "SQL Injection at Protocol Level — Binary Smuggling",
+      "conference": "DEF CON 32 2024 — Paul Gerste (Snyk)",
       "h1_frequency": "low",
       "h1_avg_bounty_usd": 8000,
       "summary": "Integer overflow en el parsing de longitud de mensajes MySQL/PostgreSQL permite inyectar queries completas a nivel de protocolo binario, bypasseando WAFs y prepared statements que solo miran la capa HTTP. Afecta aplicaciones que usan MySQL con integer overflow en el campo de longitud.",
@@ -1346,14 +1557,14 @@
     },
     {
       "id": "RACE_CONDITION_SINGLE_PACKET",
-      "name": "Race Conditions \u2014 HTTP/2 Single Packet Attack",
-      "conference": "PortSwigger 2023 \u2014 James Kettle (Top 10 #1 2023)",
+      "name": "Race Conditions — HTTP/2 Single Packet Attack",
+      "conference": "PortSwigger 2023 — James Kettle (Top 10 #1 2023)",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 5000,
-      "summary": "Combinando Nagle's algorithm con HTTP/2 multiplexing, se pueden enviar m\u00faltiples peticiones en un solo paquete TCP eliminando el jitter de red. Esto hace explotar race conditions previamente no reproducibles: redimir cup\u00f3n dos veces, bypass de rate limiting, doble gasto.",
+      "summary": "Combinando Nagle's algorithm con HTTP/2 multiplexing, se pueden enviar múltiples peticiones en un solo paquete TCP eliminando el jitter de red. Esto hace explotar race conditions previamente no reproducibles: redimir cupón dos veces, bypass de rate limiting, doble gasto.",
       "trigger_techs": [
         "HTTP/2",
-        "cualquier endpoint de transacci\u00f3n"
+        "cualquier endpoint de transacción"
       ],
       "trigger_paths": [
         "/api/redeem",
@@ -1365,7 +1576,7 @@
         "/claim"
       ],
       "detection": [
-        "Endpoints de transacci\u00f3n \u00fanica (cupones, transferencias, votos)",
+        "Endpoints de transacción única (cupones, transferencias, votos)",
         "Tests con Turbo Intruder en Burp (single-packet mode)",
         "Verificar si el servidor soporta HTTP/2"
       ],
@@ -1386,10 +1597,10 @@
     {
       "id": "SAML_VOID_CANONICALIZATION",
       "name": "SAML Void Canonicalization Bypass",
-      "conference": "BlackHat Europe 2025 \u2014 Fedotkin (PortSwigger Top 10 2025 #1 candidate)",
+      "conference": "BlackHat Europe 2025 — Fedotkin (PortSwigger Top 10 2025 #1 candidate)",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 10000,
-      "summary": "Forzar un error en la canonicalizaci\u00f3n XML hace que el c\u00f3digo de verificaci\u00f3n de firma trate los datos firmados como vac\u00edos. Combinado con inconsistencias en el parsing de namespaces/atributos, permite bypass completo de autenticaci\u00f3n SAML. CVE-2025-66568 (Ruby-SAML) y CVE-2025-66567 afectan GitLab y muchas apps Ruby.",
+      "summary": "Forzar un error en la canonicalización XML hace que el código de verificación de firma trate los datos firmados como vacíos. Combinado con inconsistencias en el parsing de namespaces/atributos, permite bypass completo de autenticación SAML. CVE-2025-66568 (Ruby-SAML) y CVE-2025-66567 afectan GitLab y muchas apps Ruby.",
       "trigger_techs": [
         "SAML",
         "SSO",
@@ -1410,8 +1621,8 @@
         "Issuer"
       ],
       "detection": [
-        "Detectar endpoints SAML ACS (m\u00f3dulo 12 login_finder ya los detecta)",
-        "Verificar versi\u00f3n de ruby-saml < 1.18.0",
+        "Detectar endpoints SAML ACS (módulo 12 login_finder ya los detecta)",
+        "Verificar versión de ruby-saml < 1.18.0",
         "Nuclei con tags saml, cve-2025-66568",
         "Comprobar si la app usa Ruby/Rails con devise-saml"
       ],
@@ -1430,11 +1641,11 @@
     },
     {
       "id": "FUNKY_CHUNKS_SMUGGLING",
-      "name": "Funky Chunks \u2014 HTTP Request Smuggling Primitives",
-      "conference": "PortSwigger Top 10 2025 \u2014 James Kettle / albinowax",
+      "name": "Funky Chunks — HTTP Request Smuggling Primitives",
+      "conference": "PortSwigger Top 10 2025 — James Kettle / albinowax",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 6000,
-      "summary": "Nuevas primitivas de HTTP Request Smuggling que abusan de ambig\u00fcedades en el parsing de chunked bodies: terminadores de l\u00ednea de dos bytes, extensiones de chunk ignoradas, y overreads en trailer sections. Funcionan sin depender del cl\u00e1sico CL.TE/TE.CL, afectando CDNs y load balancers modernos. Permiten bypass de reglas de frontend y tunneling.",
+      "summary": "Nuevas primitivas de HTTP Request Smuggling que abusan de ambigüedades en el parsing de chunked bodies: terminadores de línea de dos bytes, extensiones de chunk ignoradas, y overreads en trailer sections. Funcionan sin depender del clásico CL.TE/TE.CL, afectando CDNs y load balancers modernos. Permiten bypass de reglas de frontend y tunneling.",
       "trigger_techs": [
         "Nginx",
         "Apache",
@@ -1446,9 +1657,9 @@
         "cualquier endpoint enrutado por proxy/CDN"
       ],
       "detection": [
-        "Extensi\u00f3n del m\u00f3dulo 24 de HTTP Smuggling existente",
+        "Extensión del módulo 24 de HTTP Smuggling existente",
         "Nuclei con tags smuggling + funky-chunks",
-        "Hosts con CDN activa (ya detectado en m\u00f3dulo 28)"
+        "Hosts con CDN activa (ya detectado en módulo 28)"
       ],
       "nuclei_tags": [
         "smuggling",
@@ -1465,10 +1676,10 @@
     {
       "id": "CROSS_SITE_WEBSOCKET_HIJACKING",
       "name": "Cross-Site WebSocket Hijacking (CSWSH)",
-      "conference": "PortSwigger Top 10 2025 \u2014 nuevas variantes",
+      "conference": "PortSwigger Top 10 2025 — nuevas variantes",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3500,
-      "summary": "Si un servidor WebSocket no valida el Origin header, una web maliciosa puede abrir una conexi\u00f3n WebSocket autenticada (usando las cookies del usuario) y leer/escribir mensajes. Variantes 2025: bypass de CORS en WS upgrade, tunneling sobre WebSocket para exfiltraci\u00f3n de datos de chat/soporte.",
+      "summary": "Si un servidor WebSocket no valida el Origin header, una web maliciosa puede abrir una conexión WebSocket autenticada (usando las cookies del usuario) y leer/escribir mensajes. Variantes 2025: bypass de CORS en WS upgrade, tunneling sobre WebSocket para exfiltración de datos de chat/soporte.",
       "trigger_techs": [
         "WebSocket",
         "Socket.io",
@@ -1510,10 +1721,10 @@
     {
       "id": "GITHUB_ACTIONS_RUNNER_TAKEOVER",
       "name": "GitHub Actions Self-Hosted Runner Takeover",
-      "conference": "BlackHat 2024 + DEF CON 32 \u2014 Adnan Khan & John Stawinski ($100k bounty)",
+      "conference": "BlackHat 2024 + DEF CON 32 — Adnan Khan & John Stawinski ($100k bounty)",
       "h1_frequency": "low",
       "h1_avg_bounty_usd": 15000,
-      "summary": "Repositorios p\u00fablicos con self-hosted runners permiten a cualquiera inyectar c\u00f3digo en el runner a trav\u00e9s de pull requests maliciosos. El runner tiene acceso a secrets de CI/CD, tokens de cloud providers y puede escalar a la infraestructura interna. Gato-X automatiza el ataque.",
+      "summary": "Repositorios públicos con self-hosted runners permiten a cualquiera inyectar código en el runner a través de pull requests maliciosos. El runner tiene acceso a secrets de CI/CD, tokens de cloud providers y puede escalar a la infraestructura interna. Gato-X automatiza el ataque.",
       "trigger_techs": [
         "GitHub Actions",
         "CI/CD",
@@ -1522,10 +1733,10 @@
       ],
       "trigger_paths": [
         "/.github/workflows/",
-        "repositorios p\u00fablicos con runners"
+        "repositorios públicos con runners"
       ],
       "detection": [
-        "M\u00f3dulo 16 de GitHub dorking ya busca repos p\u00fablicos",
+        "Módulo 16 de GitHub dorking ya busca repos públicos",
         "Buscar runs-on: self-hosted en workflows",
         "Gato-X: github.com/praetorian-inc/gato"
       ],
@@ -1543,21 +1754,21 @@
     },
     {
       "id": "PARSER_DIFFERENTIALS",
-      "name": "Parser Differentials \u2014 Interpretation Divergence",
-      "conference": "PortSwigger Top 10 2025 #10 \u2014 @joernchen",
+      "name": "Parser Differentials — Interpretation Divergence",
+      "conference": "PortSwigger Top 10 2025 #10 — @joernchen",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 4000,
-      "summary": "Cuando dos componentes del stack (WAF + app, proxy + backend, deserializador + procesador) parsean el mismo input de forma diferente, uno puede ver algo benigno mientras el otro ejecuta el payload. Afecta m\u00faltiples lenguajes y frameworks. T\u00e9cnica para bypasear WAFs y validaciones de seguridad usando inputs ambiguos.",
+      "summary": "Cuando dos componentes del stack (WAF + app, proxy + backend, deserializador + procesador) parsean el mismo input de forma diferente, uno puede ver algo benigno mientras el otro ejecuta el payload. Afecta múltiples lenguajes y frameworks. Técnica para bypasear WAFs y validaciones de seguridad usando inputs ambiguos.",
       "trigger_techs": [
-        "cualquier stack con m\u00faltiples capas de parsing"
+        "cualquier stack con múltiples capas de parsing"
       ],
       "trigger_paths": [
-        "endpoints con WAF, JSON doble-parsing, XML/JSON h\u00edbrido"
+        "endpoints con WAF, JSON doble-parsing, XML/JSON híbrido"
       ],
       "detection": [
         "Fuzzing con inputs ambiguos en boundaries de parsing",
-        "Duplicar par\u00e1metros JSON con valores distintos",
-        "Mezclar encoding UTF-8 inv\u00e1lido en inputs"
+        "Duplicar parámetros JSON con valores distintos",
+        "Mezclar encoding UTF-8 inválido en inputs"
       ],
       "payloads": [
         "{\"key\": \"safe\", \"key\": \"malicious\"}",
@@ -1577,11 +1788,11 @@
     },
     {
       "id": "NEXTJS_CACHE_POISONING",
-      "name": "Next.js Cache Poisoning \u2014 XSS/DoS via SSG",
-      "conference": "PortSwigger Top 10 2024 nominations \u2014 Rachid A",
+      "name": "Next.js Cache Poisoning — XSS/DoS via SSG",
+      "conference": "PortSwigger Top 10 2024 nominations — Rachid A",
       "h1_frequency": "medium",
       "h1_avg_bounty_usd": 3000,
-      "summary": "Forzar que contenido din\u00e1mico de Next.js sea generado est\u00e1ticamente (SSG) al manipular par\u00e1metros de la petici\u00f3n. Si el contenido din\u00e1mico incluye input del usuario sin sanitizar, se puede cachear un XSS que afecta a todos los usuarios que visiten esa ruta. Tambi\u00e9n permite DoS cacheando respuestas de error.",
+      "summary": "Forzar que contenido dinámico de Next.js sea generado estáticamente (SSG) al manipular parámetros de la petición. Si el contenido dinámico incluye input del usuario sin sanitizar, se puede cachear un XSS que afecta a todos los usuarios que visiten esa ruta. También permite DoS cacheando respuestas de error.",
       "trigger_techs": [
         "Next.js",
         "React",
@@ -1599,7 +1810,7 @@
         "rutas con getStaticProps/ISR"
       ],
       "detection": [
-        "Detectar Next.js (ya lo hace react2shell en m\u00f3dulo 25)",
+        "Detectar Next.js (ya lo hace react2shell en módulo 25)",
         "Buscar rutas con ISR (Incremental Static Regeneration)",
         "Nuclei con tags nextjs,cache-poisoning"
       ],
@@ -1616,23 +1827,23 @@
     },
     {
       "id": "COOKIE_SANDWICH",
-      "name": "Cookie Sandwich \u2014 HttpOnly Bypass",
-      "conference": "PortSwigger Research 2024 \u2014 Zakhar Fedotkin",
+      "name": "Cookie Sandwich — HttpOnly Bypass",
+      "conference": "PortSwigger Research 2024 — Zakhar Fedotkin",
       "h1_frequency": "low",
       "h1_avg_bounty_usd": 2500,
-      "summary": "T\u00e9cnica que abusa de un loophole en el parsing legacy de cookies para leer el valor de cookies HttpOnly desde JavaScript, bypasseando la protecci\u00f3n HttpOnly en ciertos servidores. Se basa en rodear la cookie objetivo con cookies crafteadas que confunden al parser del servidor.",
+      "summary": "Técnica que abusa de un loophole en el parsing legacy de cookies para leer el valor de cookies HttpOnly desde JavaScript, bypasseando la protección HttpOnly en ciertos servidores. Se basa en rodear la cookie objetivo con cookies crafteadas que confunden al parser del servidor.",
       "trigger_techs": [
         "PHP",
         "Ruby",
         "Python",
-        "Node.js \u2014 servidores con parsing legacy"
+        "Node.js — servidores con parsing legacy"
       ],
       "trigger_paths": [
         "cualquier endpoint que refleje cookies en respuesta"
       ],
       "detection": [
         "Detectar cookies HttpOnly en las respuestas",
-        "Comprobar versi\u00f3n del servidor (PHP, Ruby) vulnerable",
+        "Comprobar versión del servidor (PHP, Ruby) vulnerable",
         "Test con cookies duplicadas en distintos formatos"
       ],
       "nuclei_tags": [

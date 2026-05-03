@@ -44,37 +44,44 @@ module_run() {
 
   local NUCLEI_OUT="$OUT_DIR/nuclei_subs_$(date '+%Y%m%d_%H%M%S').json"
   local SEVERITY="${NUCLEI_SEVERITY:-medium,high,critical}"
-  local THREADS="${NUCLEI_THREADS:-25}"
 
   # Preparar lista con https:// prefix
   sed 's|^|https://|' "$PENDING_FILE" > "$OUT_DIR/.nuclei_targets.txt"
 
+  local THREADS="${NUCLEI_THREADS:-15}"
+  local NUCLEI_TIMEOUT="${NUCLEI_MODULE_TIMEOUT:-900}"  # 15 min max por batch
+
+  timeout "$NUCLEI_TIMEOUT" \
   "${NUCLEI_BIN:-nuclei}" \
     -l "$OUT_DIR/.nuclei_targets.txt" \
     -severity "$SEVERITY" \
     -json-export "$NUCLEI_OUT" \
     -c "$THREADS" \
+    -rl 50 \
+    -timeout 10 \
+    -max-host-error 5 \
     -silent \
     -no-interactsh \
     ${NUCLEI_EXTRA_TEMPLATES:+-t "$NUCLEI_EXTRA_TEMPLATES"} \
     2>/dev/null \
-  || log_warn "nuclei: error en ejecución"
+  || log_warn "nuclei: completado o timeout tras ${NUCLEI_TIMEOUT}s"
 
   # Procesar resultados JSON
   if [[ -s "$NUCLEI_OUT" ]] && command -v jq &>/dev/null; then
     log_info "Procesando findings de nuclei..."
     while IFS= read -r LINE; do
       local TEMPLATE SEVERITY_F HOST INFO DETAIL
-      TEMPLATE=$(echo "$LINE"  | jq -r '.template-id // "unknown"')
+      TEMPLATE=$(echo "$LINE"  | jq -r '.["template-id"] // "unknown"')
       SEVERITY_F=$(echo "$LINE" | jq -r '.info.severity // "unknown"')
-      HOST=$(echo "$LINE"      | jq -r '.host // .matched-at // ""')
+      HOST=$(echo "$LINE"      | jq -r '.host // .["matched-at"] // ""')
       INFO=$(echo "$LINE"      | jq -r '.info.name // ""')
-      DETAIL=$(echo "$LINE"    | jq -r '.matched-at // .curl-command // ""' | head -c 300)
+      DETAIL=$(echo "$LINE"    | jq -r '.["matched-at"] // .["curl-command"] // ""' | head -c 300)
 
+      [[ -z "$TEMPLATE" || "$TEMPLATE" == "unknown" ]] && continue
       log_warn "🔴 Nuclei finding [$SEVERITY_F]: $TEMPLATE @ $HOST"
       notify_nuclei_finding "$DOMAIN" "$TEMPLATE" "$SEVERITY_F" "$HOST" "$DETAIL"
       db_add_finding "$DOMAIN_ID" "nuclei" "$SEVERITY_F" "$HOST" "$TEMPLATE" "$DETAIL"
-    done < <(jq -c '.' "$NUCLEI_OUT" 2>/dev/null)
+    done < <(jq -c '.[]? // if type=="object" then . else empty end' "$NUCLEI_OUT" 2>/dev/null)
   fi
 
   # Marcar subdominios como nuclei_done

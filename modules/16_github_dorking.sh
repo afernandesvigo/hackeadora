@@ -113,6 +113,14 @@ module_run() {
 
       [[ -z "$REPO_URL" ]] && continue
 
+      # Filtrar repos que son listas públicas de dominios — siempre contienen cualquier dominio activo
+      local REPO_NAME="${REPO_URL##*/}"
+      if echo "${REPO_NAME}/${FILE_PATH}" | grep -qiE \
+        "top.?1m|top.?million|tranco|alexa|domain.?list|new.?domain|PIIxel|majestic|\
+invalid_html|crawl.?result|Analysis_Tranco|Tranco1M|domainlist|all-domain"; then
+        continue
+      fi
+
       # Determinar tipo de finding
       local FTYPE="secret"
       echo "$DORK" | grep -qi "password\|secret\|key\|token\|credential\|private" && FTYPE="secret"

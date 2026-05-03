@@ -5,32 +5,28 @@
 #
 #  Por cada JS encontrado en el crawling:
 #    1. Descarga el archivo
-#    2. Extrae SECRETS con patrones regex + secretfinder
-#    3. Extrae ENDPOINTS (paths de API, rutas, fetch/axios...)
+#    2. Extrae SECRETS con patrones regex
+#    3. Extrae ENDPOINTS con un único paso Python (capture groups, sin noise)
 #    4. Inyecta los endpoints nuevos en la tabla urls
-#       para que entren en la rueda de nuclei + active_scan
 #    5. Notifica por Telegram si encuentra secrets
+#    6. Probe HTTP de endpoints sensibles (batch al final)
 # ============================================================
 
 MODULE_NAME="js_analyzer"
 MODULE_DESC="Análisis de JS — secrets y endpoints"
 
 # ── Patrones de secrets ───────────────────────────────────────
-# Formato: "NOMBRE|REGEX"
 declare -a SECRET_PATTERNS=(
-  # Cloud providers
   "AWS_ACCESS_KEY|AKIA[0-9A-Z]{16}"
   "AWS_SECRET_KEY|(?i)(?:aws.?secret|SecretAccessKey|secret.access.key)[\s:=\"']{0,20}([A-Za-z0-9/+=]{40})"
   "GOOGLE_API_KEY|AIza[0-9A-Za-z\\-_]{35}"
   "GOOGLE_OAUTH|[0-9]+-[0-9A-Za-z_]{32}\\.apps\\.googleusercontent\\.com"
   "FIREBASE_KEY|AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}"
   "AZURE_CONN|DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+"
-  # Payment
   "STRIPE_LIVE|sk_live_[0-9a-zA-Z]{24,}"
   "STRIPE_PUB|pk_live_[0-9a-zA-Z]{24,}"
   "PAYPAL_TOKEN|access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"
   "BRAINTREE|access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"
-  # Auth / tokens
   "GITHUB_TOKEN|gh[pousr]_[A-Za-z0-9_]{36,255}"
   "SLACK_TOKEN|xox[baprs]-([0-9a-zA-Z]{10,48})"
   "SLACK_WEBHOOK|https://hooks\\.slack\\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+"
@@ -39,49 +35,22 @@ declare -a SECRET_PATTERNS=(
   "TELEGRAM_BOT|[0-9]{8,10}:[A-Za-z0-9_-]{35}"
   "JWT_TOKEN|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
   "BEARER_TOKEN|[Bb]earer\\s+[A-Za-z0-9\\-._~+/]+=*"
-  # Databases
   "MONGODB_URI|mongodb(\\+srv)?://[^\\s'\"]+"
   "MYSQL_URI|mysql://[^\\s'\"]+"
   "POSTGRES_URI|postgres(ql)?://[^\\s'\"]+"
   "REDIS_URI|redis://[^\\s'\"]+"
-  # Generic secrets
   "PRIVATE_KEY|-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY"
   "PASSWORD_VAR|['\"]?password['\"]?\\s*[:=]\\s*['\"][^'\"]{6,}['\"]"
   "API_KEY_VAR|['\"]?api.?key['\"]?\\s*[:=]\\s*['\"][A-Za-z0-9\\-_.]{16,}['\"]"
   "SECRET_VAR|['\"]?secret['\"]?\\s*[:=]\\s*['\"][A-Za-z0-9\\-_.]{8,}['\"]"
   "TOKEN_VAR|['\"]?token['\"]?\\s*[:=]\\s*['\"][A-Za-z0-9\\-_.]{16,}['\"]"
-  # Maps / analytics
   "MAPBOX_TOKEN|pk\\.eyJ1[A-Za-z0-9._-]+"
   "SENDGRID_KEY|SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}"
   "TWILIO_SID|AC[a-z0-9]{32}"
   "MAILCHIMP|[0-9a-f]{32}-us[0-9]+"
 )
 
-# ── Patrones de endpoints ─────────────────────────────────────
-# Extraemos: /api/v1/..., fetch("..."), axios.get("..."), href=, action=, etc.
-declare -a ENDPOINT_PATTERNS=(
-  # Rutas de API explícitas
-  "\"(/api/[^\"\s]{2,100})\""
-  "'(/api/[^'\s]{2,100})'"
-  "\`(/api/[^\`\s]{2,100})\`"
-  # fetch / axios / XMLHttpRequest
-  "fetch\(['\"\`]([^'\"\`\s]{3,200})['\"\`]"
-  "axios\.[a-z]+\(['\"\`]([^'\"\`\s]{3,200})['\"\`]"
-  "XMLHttpRequest[^\"']*[\"']([^\"'\s]{3,200})[\"']"
-  "\\.open\(['\"][A-Z]+['\"],\s*['\"]([^'\"]{3,200})['\"]"
-  # href / src / action
-  "href\s*=\s*['\"]([^'\"#\s]{5,200})['\"]"
-  "action\s*=\s*['\"]([^'\"#\s]{5,200})['\"]"
-  # Rutas generales
-  "path\s*:\s*['\"]([/][^'\"]{2,100})['\"]"
-  "url\s*:\s*['\"]([^'\"]{5,200})['\"]"
-  "baseURL\s*[=:]\s*['\"\`]([^'\"\`\s]{5,200})['\"\`]"
-  "endpoint\s*[=:]\s*['\"\`]([^'\"\`\s]{5,200})['\"\`]"
-  # Rutas con método HTTP
-  "\.(get|post|put|patch|delete)\(['\"\`]([^'\"\`\s]{3,200})['\"\`]"
-)
-
-# ── Patrones de endpoints sensibles a probar ─────────────────
+# ── Patrones sensibles para probe HTTP ───────────────────────
 declare -a _SENSITIVE_API_PATTERNS=(
   "/api/.*/me(\.json)?$"
   "/api/.*/users?/me"
@@ -97,7 +66,6 @@ declare -a _SENSITIVE_API_PATTERNS=(
 
 # ── Helpers ───────────────────────────────────────────────────
 _mask_secret() {
-  # Muestra primeros 6 y últimos 4 chars, oculta el centro
   local VAL="$1"
   local LEN=${#VAL}
   if [[ $LEN -le 12 ]]; then
@@ -110,7 +78,6 @@ _mask_secret() {
 _is_likely_false_positive() {
   local VAL="$1"
   local CTX="${2:-}"
-  # Descarta placeholders comunes
   local FP_PATTERNS=("your_" "YOUR_" "example" "EXAMPLE" "placeholder"
                      "xxxxxxx" "XXXXXXX" "000000" "111111" "test123"
                      "changeme" "CHANGEME" "<" ">" "\${" "{{"
@@ -124,13 +91,107 @@ _is_likely_false_positive() {
   return 1
 }
 
-# ── Probe de endpoints sensibles sin autenticación ───────────
+# ── Extractor de endpoints en Python (un solo paso) ──────────
+# Recibe: JS_FILE BASE_ORIGIN DOMAIN
+# Devuelve líneas: EP<TAB>FULL_URL<TAB>METHOD  (FULL_URL y METHOD pueden ser vacíos)
+_extract_endpoints_py() {
+  local JS_FILE="$1"
+  local BASE_ORIGIN="$2"
+  local DOMAIN="$3"
+
+  python3 - "$JS_FILE" "$BASE_ORIGIN" "$DOMAIN" <<'PYEOF'
+import re, sys
+
+js_file, base_origin, domain = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Rutas de noise a filtrar (framework internals, assets)
+NOISE_PATH_RE = re.compile(
+    r'^/?(_next/|__next|webpack|node_modules|\.well-known)'
+    r'|\.(?:js|css|png|jpg|gif|svg|ico|woff|woff2|ttf|eot|map|webp)(?:\?|$)',
+    re.I
+)
+
+# Patrones: (compiled_regex, group_index_for_endpoint, method_hint)
+PATTERNS = [
+    # /api/... in quotes
+    (re.compile(r'''["'`](/api/[^"'`\s]{2,150})["'`]'''), 1, None),
+    # fetch/axios/http calls
+    (re.compile(r'''fetch\(["'`]([^"'`\s]{3,200})["'`]'''), 1, None),
+    (re.compile(r'''axios\.(\w+)\(["'`]([^"'`\s]{3,200})["'`]'''), 2, 1),
+    (re.compile(r'''XMLHttpRequest[^"']{0,50}["']([^"'\s]{3,200})["']'''), 1, None),
+    (re.compile(r'''\.open\(["'][A-Z]+["'],\s*["']([^"']{3,200})["']'''), 1, None),
+    # http.get/post/put/patch/delete
+    (re.compile(r'''\.(get|post|put|patch|delete)\(["'`]([^"'`\s]{3,200})["'`]''', re.I), 2, 1),
+    # href/action/src for non-static paths
+    (re.compile(r'''href\s*=\s*["']([^"'#\s]{5,200})["']'''), 1, None),
+    (re.compile(r'''action\s*=\s*["']([^"'#\s]{5,200})["']'''), 1, None),
+    # url/endpoint/baseURL config
+    (re.compile(r'''(?:url|endpoint)\s*:\s*["'`]([^"'`\s]{5,200})["'`]'''), 1, None),
+    (re.compile(r'''baseURL\s*[=:]\s*["'`]([^"'`\s]{5,200})["'`]'''), 1, None),
+    # path: "/..."
+    (re.compile(r'''path\s*:\s*["']([/][^"']{2,100})["']'''), 1, None),
+]
+
+try:
+    content = open(js_file, encoding='utf-8', errors='ignore').read()
+except Exception:
+    sys.exit(0)
+
+seen = set()
+results = []
+
+for pat, ep_grp, method_grp in PATTERNS:
+    for m in pat.finditer(content):
+        try:
+            ep = m.group(ep_grp)
+        except IndexError:
+            continue
+        if not ep:
+            continue
+
+        ep = ep.strip().strip('"\'`').replace('\\/', '/')
+
+        if len(ep) < 3:
+            continue
+        if NOISE_PATH_RE.search(ep):
+            continue
+
+        # Resolve to full URL
+        full_url = ''
+        if ep.startswith('http://') or ep.startswith('https://'):
+            if domain in ep:
+                full_url = ep
+        elif ep.startswith('/'):
+            full_url = base_origin + ep
+
+        # Method hint
+        method = ''
+        if method_grp:
+            try:
+                method = m.group(method_grp).upper()
+            except IndexError:
+                pass
+        if method in ('GET', ''):
+            method = ''
+
+        key = ep
+        if key in seen:
+            continue
+        seen.add(key)
+
+        results.append(f"{ep}\t{full_url}\t{method}")
+
+for r in results:
+    print(r)
+PYEOF
+}
+
+# ── Probe de endpoint sensible sin autenticación ─────────────
 _probe_api_endpoint() {
   local FULL_URL="$1"
   local DOMAIN_ID="$2"
   local DOMAIN="$3"
 
-  # Verificar si el path hace match con un patrón sensible
   local PATH_PART
   PATH_PART=$(echo "$FULL_URL" | sed 's|https\?://[^/]*||')
   local MATCH=false
@@ -139,7 +200,7 @@ _probe_api_endpoint() {
   done
   [[ "$MATCH" == false ]] && return
 
-  log_info "  🔍 Probando endpoint sin auth: $FULL_URL"
+  log_info "  🔍 Probando endpoint sin auth: $FULL_URL" >&2
 
   local TMP_RESP
   TMP_RESP=$(mktemp /tmp/recon_api_XXXXXX.json)
@@ -155,12 +216,10 @@ _probe_api_endpoint() {
     rm -f "$TMP_RESP"; return
   fi
 
-  # Verificar que es JSON válido
   python3 -c "import json; json.load(open('$TMP_RESP'))" 2>/dev/null || {
     rm -f "$TMP_RESP"; return
   }
 
-  # Buscar campos sensibles en la respuesta
   local FOUND
   FOUND=$(python3 - "$TMP_RESP" <<'PYEOF' 2>/dev/null
 import json, sys
@@ -190,8 +249,7 @@ PYEOF
   rm -f "$TMP_RESP"
 
   [[ -z "$FOUND" ]] && {
-    # Respuesta 200 JSON sin campos sensibles — avisar igualmente para inspección manual
-    log_info "  ℹ️  Endpoint sin auth OK pero sin campos sensibles obvios: $FULL_URL"
+    log_info "  ℹ️  Endpoint sin auth OK pero sin campos sensibles: $FULL_URL" >&2
     return
   }
 
@@ -202,8 +260,8 @@ $FOUND
 Respuesta:
 $BODY_EXCERPT"
 
-  log_warn "⚠️  API INFO DISCLOSURE: $FULL_URL"
-  log_warn "    Campos: $(echo "$FOUND" | tr '\n' ' ')"
+  log_warn "⚠️  API INFO DISCLOSURE: $FULL_URL" >&2
+  log_warn "    Campos: $(echo "$FOUND" | tr '\n' ' ')" >&2
 
   db_add_finding "$DOMAIN_ID" "api_info_disclosure" "high" \
     "$FULL_URL" "unauthenticated_api" "$DETAIL"
@@ -213,11 +271,10 @@ $BODY_EXCERPT"
 🎯 URL: \`${FULL_URL}\`
 🔓 Accesible sin auth — HTTP ${STATUS}
 📋 Campos: \`$(echo "$FOUND" | head -3 | tr '\n' ' ' | cut -c1-200)\`
-🔍 Requiere investigación manual
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 }
 
-# ── Descarga y análisis de un JS ──────────────────────────────
+# ── Análisis de un archivo JS ─────────────────────────────────
 _analyze_js_file() {
   local JS_URL="$1"
   local DOMAIN_ID="$2"
@@ -227,27 +284,22 @@ _analyze_js_file() {
   local SUBDOMAIN
   SUBDOMAIN=$(echo "$JS_URL" | sed 's|https\?://||;s|/.*||')
 
-  # Nombre de archivo seguro para guardar
   local SAFE_NAME
   SAFE_NAME=$(echo "$JS_URL" | md5sum | cut -d' ' -f1)
   local JS_FILE="$WORK_DIR/${SAFE_NAME}.js"
+  local EP_RAW="$WORK_DIR/${SAFE_NAME}.ep.txt"
 
-  # Descargar
-  local SIZE=0
   if ! curl -sL --max-time 15 --max-filesize 5000000 \
        -A "Mozilla/5.0 (compatible; Hackeadora/1.0)" \
        -o "$JS_FILE" "$JS_URL" 2>/dev/null; then
     return
   fi
-
   [[ ! -s "$JS_FILE" ]] && return
-  SIZE=$(wc -c < "$JS_FILE" | tr -d ' ')
 
-  # Calcular hash para detectar cambios
-  local SHA
+  local SIZE SHA
+  SIZE=$(wc -c < "$JS_FILE" | tr -d ' ')
   SHA=$(sha256sum "$JS_FILE" | cut -d' ' -f1)
 
-  # Guardar en DB y obtener ID
   local JS_FILE_ID
   JS_FILE_ID=$(db_upsert_js_file "$DOMAIN_ID" "$JS_URL" "$SUBDOMAIN" "$SIZE" "$SHA" 0 0)
   [[ -z "$JS_FILE_ID" ]] && JS_FILE_ID=0
@@ -255,19 +307,15 @@ _analyze_js_file() {
   local SECRET_COUNT=0
   local EP_COUNT=0
 
-  # ── EXTRACCIÓN DE SECRETS ─────────────────────────────────
+  # ── SECRETS ───────────────────────────────────────────────
   for PATTERN_DEF in "${SECRET_PATTERNS[@]}"; do
     local STYPE="${PATTERN_DEF%%|*}"
     local REGEX="${PATTERN_DEF#*|}"
 
-    # grep -P para PCRE, -n para nº línea, -o para solo el match
     while IFS=: read -r LINENUM MATCH; do
       [[ -z "$MATCH" ]] && continue
-
-      # Extraer contexto antes de filtrar para poder usarlo en el check
       local CONTEXT
       CONTEXT=$(sed -n "${LINENUM}p" "$JS_FILE" 2>/dev/null | cut -c1-200 | tr "'" '"')
-
       _is_likely_false_positive "$MATCH" "$CONTEXT" && continue
 
       local MASKED
@@ -281,9 +329,7 @@ _analyze_js_file() {
 
       if [[ "$IS_NEW" == "1" ]]; then
         ((SECRET_COUNT++))
-        log_warn "🔑 SECRET [$STYPE] en $JS_URL (línea $LINENUM): $MASKED"
-
-        # Notificación Telegram
+        log_warn "🔑 SECRET [$STYPE] en $JS_URL (línea $LINENUM): $MASKED" >&2
         _telegram_send "🔑 *JS Secret encontrado*
 🌐 Dominio: \`${DOMAIN}\`
 📄 Archivo: \`${JS_URL}\`
@@ -291,8 +337,6 @@ _analyze_js_file() {
 🔍 Valor: \`${MASKED}\`
 📍 Línea: ${LINENUM}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
-
-        # También como finding en la tabla principal
         db_add_finding "$DOMAIN_ID" "js_secret" "high" \
           "$JS_URL" "$STYPE" "Tipo: $STYPE | Línea: $LINENUM | Valor: $MASKED
 Archivo: $JS_URL
@@ -301,73 +345,45 @@ Contexto: $CONTEXT"
     done < <(grep -Pn "$REGEX" "$JS_FILE" 2>/dev/null | head -20 || true)
   done
 
-  # ── EXTRACCIÓN DE ENDPOINTS ───────────────────────────────
+  # ── ENDPOINTS — único paso Python ─────────────────────────
   local BASE_ORIGIN
   BASE_ORIGIN=$(echo "$JS_URL" | grep -oP 'https?://[^/]+')
 
-  # Ejecutar secretfinder si está disponible (mejor extractor de endpoints)
-  if command -v python3 &>/dev/null && [[ -f "$HOME/tools/SecretFinder/SecretFinder.py" ]]; then
-    python3 "$HOME/tools/SecretFinder/SecretFinder.py" \
-      -i "$JS_URL" -o cli 2>/dev/null \
-    | grep -oP '(?<=endpoint: )[^\s]+' \
-    > "$WORK_DIR/.sf_endpoints.txt" 2>/dev/null || true
-  fi
+  _extract_endpoints_py "$JS_FILE" "$BASE_ORIGIN" "$DOMAIN" > "$EP_RAW" 2>/dev/null || true
 
-  # Regex propia de endpoints
-  for EP_REGEX in "${ENDPOINT_PATTERNS[@]}"; do
-    grep -oPh "$EP_REGEX" "$JS_FILE" 2>/dev/null \
-    | grep -v "^$" \
-    | head -100 \
-    >> "$WORK_DIR/.ep_raw.txt" || true
-  done
+  if [[ -s "$EP_RAW" ]]; then
+    local _FILE_EP_CAP=0
+    while IFS=$'\t' read -r EP FULL_URL METHOD; do
+      [[ -z "$EP" ]] && continue
 
-  # Limpiar y procesar endpoints
-  if [[ -f "$WORK_DIR/.ep_raw.txt" ]] || [[ -f "$WORK_DIR/.sf_endpoints.txt" ]]; then
-    cat "$WORK_DIR/.ep_raw.txt" "$WORK_DIR/.sf_endpoints.txt" 2>/dev/null \
-    | sort -u \
-    | grep -v "^$" \
-    | while IFS= read -r EP; do
-        # Limpiar el endpoint
-        EP=$(echo "$EP" | tr -d "\"'" | sed 's/\\//g' | tr -d ' ')
-        [[ -z "$EP" || ${#EP} -lt 3 ]] && continue
+      # Cap: no insertar más de 500 endpoints únicos por archivo JS
+      [[ $_FILE_EP_CAP -ge 500 ]] && break
 
-        # Construir URL completa si es ruta relativa
-        local FULL_URL=""
-        if echo "$EP" | grep -qP '^https?://'; then
-          # Ya es absoluta — verificar que sea del mismo dominio
-          echo "$EP" | grep -qF "$DOMAIN" && FULL_URL="$EP"
-        elif echo "$EP" | grep -qP '^/'; then
-          # Ruta absoluta → añadir origen
-          FULL_URL="${BASE_ORIGIN}${EP}"
+      # Strip query string and fragment from endpoint path before inserting
+      EP=$(echo "$EP" | sed 's/?.*//;s/#.*//')
+      [[ -z "$EP" || "$EP" == "/" ]] && continue
+      if [[ -n "$FULL_URL" ]]; then
+        FULL_URL=$(echo "$FULL_URL" | sed 's/?.*//;s/#.*//')
+      fi
+
+      local IS_NEW
+      IS_NEW=$(db_add_js_endpoint \
+        "$DOMAIN_ID" "$JS_FILE_ID" "$JS_URL" \
+        "$EP" "$FULL_URL" "$METHOD" "")
+
+      if [[ "$IS_NEW" == "1" ]]; then
+        ((_FILE_EP_CAP++))
+        ((EP_COUNT++))
+        log_info "  ↳ $EP${FULL_URL:+ → $FULL_URL}" >&2
+        if [[ -n "$FULL_URL" ]]; then
+          db_add_url "$DOMAIN_ID" "$FULL_URL" "js_analyzer" ""
         fi
-
-        # Detectar método HTTP si viene en el patrón (ej: .post("/api/...)
-        local METHOD=""
-        echo "$EP" | grep -qiP '\b(post|put|patch|delete)\b' && \
-          METHOD=$(echo "$EP" | grep -oiP '\b(post|put|patch|delete)\b' | head -1 | tr '[:lower:]' '[:upper:]')
-
-        local IS_NEW
-        IS_NEW=$(db_add_js_endpoint \
-          "$DOMAIN_ID" "$JS_FILE_ID" "$JS_URL" \
-          "$EP" "$FULL_URL" "$METHOD" "")
-
-        if [[ "$IS_NEW" == "1" ]]; then
-          ((EP_COUNT++))
-          log_info "  ↳ endpoint: $EP${FULL_URL:+ → $FULL_URL}"
-
-          if [[ -n "$FULL_URL" ]]; then
-            db_add_url "$DOMAIN_ID" "$FULL_URL" "js_analyzer" ""
-            # Probar si es un endpoint sensible accesible sin autenticación
-            _probe_api_endpoint "$FULL_URL" "$DOMAIN_ID" "$DOMAIN"
-          fi
-        fi
-      done
-
-    rm -f "$WORK_DIR/.ep_raw.txt" "$WORK_DIR/.sf_endpoints.txt"
+      fi
+    done < "$EP_RAW"
   fi
+  rm -f "$EP_RAW"
 
-  # Actualizar contadores en js_files
-  sqlite3 "$DB_PATH" \
+  sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
     "UPDATE js_files SET endpoints_found=${EP_COUNT}, secrets_found=${SECRET_COUNT}
      WHERE id=${JS_FILE_ID};" 2>/dev/null || true
 
@@ -384,37 +400,26 @@ module_run() {
   log_phase "Módulo 11 — $MODULE_DESC: $DOMAIN"
 
   local URLS_RAW="$OUT_DIR/urls_raw.txt"
-  local ALIVE="$OUT_DIR/subs_alive.txt"
 
-  # ── Recopilar todos los JS conocidos ──────────────────────
+  # ── JS únicos: desde urls_raw.txt + DB (sin re-lanzar katana/gau) ──
   local JS_LIST="$OUT_DIR/.js_list.txt"
   > "$JS_LIST"
 
-  # 1. JS en las URLs ya crawleadas
+  # 1. JS en las URLs crawleadas por módulo 05
   if [[ -s "$URLS_RAW" ]]; then
-    grep -iP '\.js(\?[^\"]*)?$' "$URLS_RAW" >> "$JS_LIST" 2>/dev/null || true
+    grep -iP '\.js(\?[^"]*)?$' "$URLS_RAW" >> "$JS_LIST" 2>/dev/null || true
   fi
 
-  # 2. Descubrir JS adicionales con katana sobre los subdominios alive
-  if command -v "${KATANA_BIN:-katana}" &>/dev/null && [[ -s "$ALIVE" ]]; then
-    log_info "Descubriendo JS con katana..."
-    sed 's|^|https://|' "$ALIVE" \
-    | timeout 120 "${KATANA_BIN:-katana}" \
-        -l /dev/stdin \
-        -d 3 -jc -silent \
-        -extension js \
-        2>/dev/null \
-    >> "$JS_LIST" || true
-  fi
-
-  # 3. JS de gau/wayback que no estuvieran ya
-  if command -v "${GAU_BIN:-gau}" &>/dev/null; then
-    "${GAU_BIN:-gau}" --subs "$DOMAIN" 2>/dev/null \
-    | grep -iP '\.js(\?[^\"]*)?$' \
-    >> "$JS_LIST" || true
-  fi
+  # 2. JS en la DB (otros módulos pueden haberlos añadido)
+  sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
+    "SELECT DISTINCT url FROM urls
+     WHERE domain_id=${DOMAIN_ID}
+       AND url GLOB '*.js'
+        OR (domain_id=${DOMAIN_ID} AND url GLOB '*.js?*');" \
+    2>/dev/null >> "$JS_LIST" || true
 
   sort -u "$JS_LIST" -o "$JS_LIST"
+
   local TOTAL_JS
   TOTAL_JS=$(wc -l < "$JS_LIST" | tr -d ' ')
 
@@ -433,22 +438,58 @@ module_run() {
   local TOTAL_ENDPOINTS=0
   local ANALYZED=0
 
-  # ── Analizar cada JS ──────────────────────────────────────
+  # ── Procesar JS en paralelo (MAX_PARALLEL workers) ────────
+  local MAX_PARALLEL="${JS_PARALLEL:-8}"
+  local COUNT_DIR="$WORK_DIR/.counts"
+  mkdir -p "$COUNT_DIR"
+  local PIDS=()
+
   while IFS= read -r JS_URL; do
     [[ -z "$JS_URL" ]] && continue
     ((ANALYZED++))
-    log_info "[$ANALYZED/$TOTAL_JS] $JS_URL"
+    [[ $(( ANALYZED % 50 )) -eq 0 ]] && log_info "[$ANALYZED/$TOTAL_JS] procesando..."
 
-    local RESULT
-    RESULT=$(_analyze_js_file "$JS_URL" "$DOMAIN_ID" "$DOMAIN" "$WORK_DIR")
-    local S EP
-    read -r S EP <<< "$RESULT"
-    (( TOTAL_SECRETS   += ${S:-0}  ))
-    (( TOTAL_ENDPOINTS += ${EP:-0} ))
+    local SAFE
+    SAFE=$(echo "$JS_URL" | md5sum | cut -d' ' -f1)
+    local RESULT_FILE="$COUNT_DIR/${SAFE}.result"
 
+    (
+      R=$(_analyze_js_file "$JS_URL" "$DOMAIN_ID" "$DOMAIN" "$WORK_DIR")
+      echo "${R:-0 0}" > "$RESULT_FILE"
+    ) &
+    PIDS+=($!)
+
+    # Throttle: esperar al job más antiguo cuando llegamos al límite
+    if [[ ${#PIDS[@]} -ge $MAX_PARALLEL ]]; then
+      wait "${PIDS[0]}" 2>/dev/null || true
+      PIDS=("${PIDS[@]:1}")
+    fi
   done < "$JS_LIST"
 
-  # ── Marcar endpoints como encolados ───────────────────────
+  # Esperar jobs restantes
+  [[ ${#PIDS[@]} -gt 0 ]] && wait "${PIDS[@]}" 2>/dev/null || true
+
+  # Recopilar contadores de archivos de resultado
+  while IFS= read -r -d '' RFILE; do
+    local S EP
+    read -r S EP < "$RFILE" 2>/dev/null || continue
+    (( TOTAL_SECRETS   += ${S:-0}  ))
+    (( TOTAL_ENDPOINTS += ${EP:-0} ))
+  done < <(find "$COUNT_DIR" -name '*.result' -print0 2>/dev/null)
+  rm -rf "$COUNT_DIR"
+
+  # ── Probe HTTP de endpoints sensibles (batch al final) ────
+  log_info "Probando endpoints sensibles sin autenticación..."
+  sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
+    "SELECT DISTINCT full_url FROM js_endpoints
+     WHERE domain_id=${DOMAIN_ID} AND full_url != ''
+     LIMIT 500;" \
+    2>/dev/null \
+  | while IFS= read -r URL; do
+      [[ -z "$URL" ]] && continue
+      _probe_api_endpoint "$URL" "$DOMAIN_ID" "$DOMAIN"
+    done
+
   db_mark_js_endpoints_queued "$DOMAIN_ID"
 
   rm -rf "$WORK_DIR" "$JS_LIST"
@@ -456,7 +497,7 @@ module_run() {
   log_ok "$MODULE_DESC completado:"
   log_ok "  → $ANALYZED JS analizados"
   log_ok "  → $TOTAL_SECRETS secrets encontrados"
-  log_ok "  → $TOTAL_ENDPOINTS endpoints extraídos (añadidos a la rueda)"
+  log_ok "  → $TOTAL_ENDPOINTS endpoints extraídos"
 
   if [[ "$TOTAL_SECRETS" -gt 0 ]]; then
     _telegram_send "📊 *JS Analysis — Resumen*

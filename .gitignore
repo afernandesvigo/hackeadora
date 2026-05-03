@@ -1,0 +1,20 @@
+# Secrets y configuración local
+config.env
+
+# Bases de datos y outputs de scan
+data/
+output/
+results/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Herramientas y binarios descargados
+blindxss/
+
+# Archivos temporales
+*.tmp
+*.log
+.DS_Store

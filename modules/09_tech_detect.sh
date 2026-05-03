@@ -35,24 +35,29 @@ module_run() {
   log_info "Analizando tecnologías en $COUNT subdominios..."
 
   local TMP_OUT="$OUT_DIR/.whatweb_raw.json"
+  local TMP_TARGETS="$OUT_DIR/.whatweb_targets.txt"
   > "$TMP_OUT"
 
-  # Aggression 1 = pasivo (no intrusivo). Prueba HTTPS; fallback a HTTP.
-  while IFS= read -r SUB; do
-    [[ -z "$SUB" ]] && continue
-    local URL="https://${SUB}"
-    local WW_OUT
-    WW_OUT=$(whatweb --aggression 1 --quiet --log-json=/dev/stdout "$URL" 2>/dev/null)
-    # Si HTTPS devuelve array vacío, intentar HTTP
-    if [[ "$WW_OUT" == "["* ]] && echo "$WW_OUT" | jq -e '. == []' &>/dev/null; then
-      WW_OUT=$(whatweb --aggression 1 --quiet --log-json=/dev/stdout "http://${SUB}" 2>/dev/null) || true
-    fi
-    # Aplanar el array (una línea por objeto) y añadir al fichero temporal
-    echo "$WW_OUT" | jq -c '.[]' 2>/dev/null >> "$TMP_OUT" || true
-  done < "$ALIVE"
+  # Incluir https:// y http:// para cada host — whatweb filtra duplicados de contenido
+  sed 's|^|https://|' "$ALIVE" > "$TMP_TARGETS"
+  sed 's|^|http://|'  "$ALIVE" >> "$TMP_TARGETS"
+
+  # --max-threads: procesa todos los hosts en paralelo en una sola invocación
+  whatweb --aggression 1 --quiet \
+    --max-threads 20 \
+    --follow-redirect NEVER \
+    --log-json="$TMP_OUT" \
+    -i "$TMP_TARGETS" \
+    2>/dev/null || true
+
+  rm -f "$TMP_TARGETS"
+
+  # Convertir el JSON array del fichero a líneas individuales para el parser
+  local TMP_LINES="$OUT_DIR/.whatweb_lines.json"
+  jq -c '.[]' "$TMP_OUT" 2>/dev/null > "$TMP_LINES" || cp "$TMP_OUT" "$TMP_LINES"
 
   # Parsear y guardar en DB (ya una línea = un JSON object)
-  if [[ -s "$TMP_OUT" ]] && command -v jq &>/dev/null; then
+  if [[ -s "$TMP_LINES" ]] && command -v jq &>/dev/null; then
     while IFS= read -r LINE; do
       local TARGET PLUGINS TECH_JSON
       TARGET=$(echo "$LINE" | jq -r '.target // ""' 2>/dev/null | sed 's|https\?://||;s|/.*||') || continue
@@ -69,10 +74,10 @@ module_run() {
       fi
 
       echo "$LINE" >> "$OUT_JSON"
-    done < "$TMP_OUT"
+    done < "$TMP_LINES"
   fi
 
-  rm -f "$TMP_OUT"
+  rm -f "$TMP_OUT" "$TMP_LINES"
   local RESULT_COUNT
   RESULT_COUNT=$(wc -l < "$OUT_JSON" | tr -d ' ')
   log_ok "$MODULE_DESC completado: $RESULT_COUNT subdominios analizados"

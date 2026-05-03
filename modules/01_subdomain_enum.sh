@@ -24,76 +24,78 @@ module_run() {
 
   log_phase "Módulo 01 — $MODULE_DESC: $DOMAIN"
 
-  # ── subfinder ──────────────────────────────────────────────
+  # ── Lanzar todas las herramientas en paralelo ──────────────
+  # Cada herramienta escribe en su propio fichero → sin race conditions.
+  # El merge se hace después de wait con sort -u.
+
   if command -v "${SUBFINDER_BIN:-subfinder}" &>/dev/null; then
     log_info "subfinder..."
     "${SUBFINDER_BIN:-subfinder}" -d "$DOMAIN" -silent \
       -o "$TMP/subfinder.txt" 2>/dev/null \
-      || log_warn "subfinder: error o sin resultados"
+      || true &
   else
     log_warn "subfinder no encontrado, saltando"
   fi
 
-  # ── assetfinder ────────────────────────────────────────────
   if command -v assetfinder &>/dev/null; then
     log_info "assetfinder..."
     assetfinder --subs-only "$DOMAIN" \
       > "$TMP/assetfinder.txt" 2>/dev/null \
-      || log_warn "assetfinder: error o sin resultados"
+      || true &
   else
     log_warn "assetfinder no encontrado, saltando"
   fi
 
-  # ── amass (modo pasivo, rápido) ────────────────────────────
   if command -v "${AMASS_BIN:-amass}" &>/dev/null; then
     log_info "amass (modo pasivo)..."
     "${AMASS_BIN:-amass}" enum -passive -d "$DOMAIN" \
       -o "$TMP/amass.txt" 2>/dev/null \
-      || log_warn "amass: error o sin resultados"
+      || true &
   else
     log_warn "amass no encontrado, saltando"
   fi
 
-  # ── findomain ──────────────────────────────────────────────
   if command -v findomain &>/dev/null; then
     log_info "findomain..."
     findomain -t "$DOMAIN" -q \
       > "$TMP/findomain.txt" 2>/dev/null \
-      || log_warn "findomain: error o sin resultados"
+      || true &
   else
     log_warn "findomain no encontrado, saltando"
   fi
 
-  # ── bbot ───────────────────────────────────────────────────
   if command -v "${BBOT_BIN:-bbot}" &>/dev/null; then
     log_info "bbot (subdomain scan)..."
-    "${BBOT_BIN:-bbot}" -t "$DOMAIN" \
-      -m subdomain-enum \
-      -o "$TMP/bbot_out" \
-      --silent 2>/dev/null \
-    && grep -oP '[\w\.-]+\.'"${DOMAIN//./\\.}" \
-         "$TMP/bbot_out/output.txt" 2>/dev/null \
-       > "$TMP/bbot.txt" \
-    || log_warn "bbot: error o sin resultados"
+    (
+      "${BBOT_BIN:-bbot}" -t "$DOMAIN" \
+        -m subdomain-enum \
+        -o "$TMP/bbot_out" \
+        --silent 2>/dev/null \
+      && grep -oP '[\w\.-]+\.'"${DOMAIN//./\\.}" \
+           "$TMP/bbot_out/output.txt" 2>/dev/null \
+         > "$TMP/bbot.txt"
+    ) || true &
   else
     log_warn "bbot no encontrado, saltando"
   fi
 
+  log_info "Esperando resultados de todas las herramientas..."
+  wait
+
   # ── Merge y deduplicar ─────────────────────────────────────
   log_info "Consolidando resultados..."
+  # Include the root domain itself (may already be a subdomain like stride-dev.roche.com)
+  echo "$DOMAIN" > "$RAW"
   cat "$TMP"/*.txt 2>/dev/null \
     | grep -v "^$" \
     | grep -iE "^[a-z0-9._-]+\\.${DOMAIN//./\\.}$" \
-    | sort -u \
-    > "$RAW"
+    >> "$RAW"
+  sort -u "$RAW" -o "$RAW"
 
   local COUNT
   COUNT=$(wc -l < "$RAW" | tr -d ' ')
   log_ok "$MODULE_DESC completado: $COUNT subdominios únicos encontrados"
 
-  # Limpiar temporales
   rm -rf "$TMP"
-
-  # Exportar para el pipeline
   echo "$COUNT"
 }

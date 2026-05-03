@@ -178,19 +178,29 @@ module_run() {
     return
   fi
 
-  log_info "CORS check sobre $TOTAL endpoints..."
+  log_info "CORS check sobre $TOTAL endpoints (paralelo, max 10 workers)..."
 
-  local CHECKED=0 FOUND=0
+  local MAX_WORKERS=10
+  local PIDS=()
+
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
     http_should_skip "$URL" 2>/dev/null && continue
-    ((CHECKED++))
-    (( CHECKED % 20 == 0 )) && log_info "[$CHECKED/$TOTAL] chequeados..."
-
-    _test_cors_url "$URL" "$DOMAIN_ID" "$DOMAIN" "$DOMAIN" "$CURL_PROXY" && ((FOUND++))
-
+    (
+      _test_cors_url "$URL" "$DOMAIN_ID" "$DOMAIN" "$DOMAIN" "$CURL_PROXY"
+    ) &
+    PIDS+=($!)
+    if [[ ${#PIDS[@]} -ge $MAX_WORKERS ]]; then
+      wait "${PIDS[0]}" 2>/dev/null || true
+      PIDS=("${PIDS[@]:1}")
+    fi
   done < "$TARGETS"
+  wait "${PIDS[@]}" 2>/dev/null || true
 
   rm -f "$TARGETS"
-  log_ok "$MODULE_DESC completado: $FOUND CORS issues en $CHECKED endpoints"
+
+  local FOUND
+  FOUND=$(_db_query "SELECT COUNT(DISTINCT target) FROM findings
+    WHERE domain_id=${DOMAIN_ID} AND type='cors';" 2>/dev/null || echo 0)
+  log_ok "$MODULE_DESC completado: $FOUND CORS issues en $TOTAL endpoints"
 }

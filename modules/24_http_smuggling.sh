@@ -58,7 +58,7 @@ _test_clte_timing() {
 
   local START END DIFF
   START=$(date +%s%N)
-  curl -s --max-time 15 \
+  curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 15 \
     --http1.1 \
     -X POST \
     -H "Content-Length: 6" \
@@ -108,10 +108,11 @@ _run_smuggler() {
   fi
 
   if [[ -s "$SMUGGLER_OUT" ]]; then
-    # smuggler reporta "Issue Found" si detecta algo
-    if grep -qi "Issue\|vulnerable\|CLTE\|TECL\|TETE" "$SMUGGLER_OUT"; then
+    # smuggler reporta "Issue Found!" solo cuando detecta una vulnerabilidad real
+    if grep -qi "Issue Found\|vulnerable" "$SMUGGLER_OUT"; then
       local DETAIL
-      DETAIL=$(grep -i "Issue\|vulnerable\|CL\|TE" "$SMUGGLER_OUT" | head -3 | tr '\n' ' ')
+      DETAIL=$(grep -i "Issue Found\|vulnerable" "$SMUGGLER_OUT" | head -3 \
+        | sed 's/\x1b\[[0-9;]*m//g' | tr '\n' ' ')
       log_warn "  ⚡ HTTP Smuggling detectado: $URL"
 
       db_add_finding "$DOMAIN_ID" "http_smuggling" "high" \
@@ -142,8 +143,9 @@ _test_nuclei_smuggling() {
   if ! command -v nuclei &>/dev/null; then return; fi
 
   local NUCLEI_OUT
-  NUCLEI_OUT=$(nuclei -u "$URL" \
+  NUCLEI_OUT=$(timeout 60 nuclei -u "$URL" \
     -tags "smuggling,http-smuggling,request-smuggling" \
+    -timeout 10 \
     -silent -jsonl 2>/dev/null | head -5)
 
   if [[ -n "$NUCLEI_OUT" ]]; then
@@ -171,11 +173,11 @@ _test_timing_detection() {
   # Test de timing: petición normal vs con Transfer-Encoding chunked malformado
   local NORMAL_TIME TE_TIME
 
-  NORMAL_TIME=$(curl -s --max-time 10 \
+  NORMAL_TIME=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 \
     -o /dev/null -w "%{time_total}" \
     ${PROXY_FLAG} "$URL" 2>/dev/null | tr -d '.')
 
-  TE_TIME=$(curl -s --max-time 15 \
+  TE_TIME=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 15 \
     --http1.1 \
     -H "Transfer-Encoding: chunked" \
     -H "Content-Length: 4" \
@@ -185,7 +187,10 @@ _test_timing_detection() {
 
   # Si el tiempo con TE es significativamente mayor, puede ser síntoma
   if [[ -n "$TE_TIME" && -n "$NORMAL_TIME" ]]; then
-    local DIFF=$(( ${TE_TIME:-0} - ${NORMAL_TIME:-0} ))
+    # Strip leading zeros to avoid bash treating values as octal
+    TE_TIME=$(( 10#${TE_TIME:-0} ))
+    NORMAL_TIME=$(( 10#${NORMAL_TIME:-0} ))
+    local DIFF=$(( TE_TIME - NORMAL_TIME ))
     if [[ "$DIFF" -gt 5000 ]]; then  # >5 segundos de diferencia
       log_warn "  ⚡ Timing anomaly en $URL (normal:${NORMAL_TIME}ms, TE:${TE_TIME}ms)"
       db_add_finding "$DOMAIN_ID" "http_smuggling" "medium" \
@@ -259,10 +264,19 @@ module_run() {
   fi
 
   # También endpoints con proxy/gateway en la ruta (ya crawleados)
+  # In single-target mode, scope to the specific subdomain to avoid contamination
+  local ALIVE_FILE="$OUT_DIR/subs_alive.txt"
+  local URL_HOST_FILTER=""
+  if [[ -s "$ALIVE_FILE" && "$(wc -l < "$ALIVE_FILE" | tr -d ' ')" == "1" ]]; then
+    local _SINGLE
+    _SINGLE=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
+    URL_HOST_FILTER="AND (url LIKE 'https://${_SINGLE}/%' OR url LIKE 'http://${_SINGLE}/%')"
+  fi
   sqlite3 "$DB_PATH" \
     "SELECT DISTINCT url FROM urls
      WHERE domain_id=${DOMAIN_ID}
        AND (url LIKE '%/api/%' OR url LIKE '%/proxy%' OR url LIKE '%/gateway%')
+       ${URL_HOST_FILTER}
      LIMIT 20;" 2>/dev/null >> "$TARGETS"
 
   sort -u "$TARGETS" -o "$TARGETS"

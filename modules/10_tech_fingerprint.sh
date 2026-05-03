@@ -67,23 +67,37 @@ _parse_httpx_tech() {
   local JSON_LINE="$1"
   local DOMAIN_ID="$2"
 
-  local URL TECHS
+  local URL
   URL=$(echo "$JSON_LINE" | jq -r '.url // ""')
   [[ -z "$URL" ]] && return
 
   local SUBDOMAIN
   SUBDOMAIN=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
 
-  # httpx devuelve: {"technologies": [{"name":"nginx","version":"1.18"},...]}
-  echo "$JSON_LINE" | jq -c '.technologies[]? // empty' 2>/dev/null | while IFS= read -r T; do
-    local TNAME TVER TCAT
-    TNAME=$(echo "$T" | jq -r '.name // ""')
-    TVER=$(echo "$T"  | jq -r '.version // ""')
-    TCAT=$(echo "$T"  | jq -r '.category // ""')
+  # httpx devuelve "tech": ["Cloudflare","OutSystems",...] (lista de strings)
+  # y "cpe": [{"vendor":"..","product":"..","cpe":"..."}] para versiones CPE
+  # Construir mapa de versiones desde CPE
+  local CPE_JSON
+  CPE_JSON=$(echo "$JSON_LINE" | jq -r '.cpe // []' 2>/dev/null)
+
+  echo "$JSON_LINE" | jq -r '.tech[]? // empty' 2>/dev/null | while IFS= read -r TNAME; do
     [[ -z "$TNAME" ]] && continue
+    # Buscar versión en CPE si hay match por product o vendor
+    local TVER=""
+    TVER=$(echo "$CPE_JSON" | jq -r \
+      --arg t "$(echo "$TNAME" | tr '[:upper:]' '[:lower:]')" \
+      '.[]? | select((.product | ascii_downcase | contains($t)) or (.vendor | ascii_downcase | contains($t))) | .cpe' \
+      2>/dev/null | head -1)
     db_upsert_tech "$DOMAIN_ID" "$URL" "$SUBDOMAIN" \
-      "$TNAME" "$TVER" "$TCAT" "80" "httpx"
+      "$TNAME" "${TVER}" "" "80" "httpx"
   done
+
+  # También parsear el webserver header como tech
+  local WEBSERVER
+  WEBSERVER=$(echo "$JSON_LINE" | jq -r '.webserver // ""' 2>/dev/null)
+  [[ -n "$WEBSERVER" && "$WEBSERVER" != "null" ]] && \
+    db_upsert_tech "$DOMAIN_ID" "$URL" "$SUBDOMAIN" \
+      "$WEBSERVER" "" "web-server" "90" "httpx-webserver"
 }
 
 # ── Parser de salida whatweb -json ────────────────────────────
@@ -92,7 +106,7 @@ _parse_whatweb() {
   local DOMAIN_ID="$2"
 
   local TARGET
-  TARGET=$(echo "$JSON_LINE" | jq -r '.target // ""')
+  TARGET=$(echo "$JSON_LINE" | jq -r '.target // ""' 2>/dev/null)
   [[ -z "$TARGET" ]] && return
 
   local SUBDOMAIN
@@ -189,6 +203,7 @@ module_run() {
       -json \
       -silent \
       -threads 30 \
+      ${SCAN_UA:+-H "User-Agent: ${SCAN_UA}"} \
       -o "$HX_OUT" \
       2>/dev/null || true
 
@@ -228,6 +243,316 @@ module_run() {
       rm -f "$WW_OUT"
     fi
   fi
+
+  # ── Capa 4: Custom pattern matching (SaaS/enterprise no cubiertos por Wappalyzer) ──
+  log_info "Custom fingerprints (body/header/CNAME/title)..."
+  local CUSTOM_COUNT=0
+
+  _save_tech() {
+    local SUB_="$1" TECH_="$2" VER_="$3" CAT_="$4" SRC_="$5"
+    sqlite3 "$DB_PATH" \
+      "INSERT OR REPLACE INTO technologies
+         (domain_id, url, subdomain, tech_name, tech_version, category, confidence, source)
+       VALUES(${DOMAIN_ID}, 'https://${SUB_}', '${SUB_}',
+         '${TECH_//\'/\'\'}', '${VER_//\'/\'\'}',
+         '${CAT_//\'/\'\'}', 95, '${SRC_}');" 2>/dev/null || true
+    log_info "  ✦ $SRC_: $SUB_ → $TECH_${VER_:+ $VER_}"
+    ((CUSTOM_COUNT++))
+  }
+
+  # ── CNAME-based SaaS detection (más fiable que body: no requiere ver el app) ──
+  # Mapa: patrón en CNAME → "Tech Name|Category"
+  declare -gA CNAME_VENDORS=(
+    ["cloud.looker.com"]="Looker|BI Platform"
+    ["force.com"]="Salesforce|CRM"
+    ["salesforce.com"]="Salesforce|CRM"
+    ["service-now.com"]="ServiceNow|ITSM"
+    ["myworkday.com"]="Workday|HRM"
+    ["zendesk.com"]="Zendesk|Support"
+    ["freshdesk.com"]="Freshdesk|Support"
+    ["hubspot.com"]="HubSpot|CRM"
+    ["intercom.io"]="Intercom|Support"
+    ["atlassian.net"]="Atlassian|Project Mgmt"
+    ["notion.so"]="Notion|Productivity"
+    ["airtable.com"]="Airtable|Database"
+    ["retool.com"]="Retool|Low-Code"
+    ["grafana.net"]="Grafana Cloud|Monitoring"
+    ["datadoghq.com"]="Datadog|Monitoring"
+    ["newrelic.com"]="New Relic|Monitoring"
+    ["splunkcloud.com"]="Splunk|Analytics"
+    ["tableau.com"]="Tableau|BI Platform"
+    ["powerbi.com"]="Power BI|BI Platform"
+    ["metabaseapp.com"]="Metabase|BI Platform"
+    ["supabase.co"]="Supabase|Backend"
+    ["firebase.google.com"]="Firebase|Backend"
+    ["heroku.com"]="Heroku|PaaS"
+    ["netlify.app"]="Netlify|PaaS"
+    ["vercel.app"]="Vercel|PaaS"
+    ["wpengine.com"]="WP Engine|CMS"
+    ["kinsta.cloud"]="Kinsta|CMS"
+    ["shopify.com"]="Shopify|E-Commerce"
+    ["myshopify.com"]="Shopify|E-Commerce"
+    ["bigcommerce.com"]="BigCommerce|E-Commerce"
+    ["fastly.net"]="Fastly CDN|CDN"
+    ["cloudfront.net"]="AWS CloudFront|CDN"
+    ["akamaized.net"]="Akamai|CDN"
+    ["cdn77.org"]="CDN77|CDN"
+  )
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+
+    # ── CNAME lookup ──────────────────────────────────────────
+    local CNAMES
+    CNAMES=$(dig +short CNAME "${SUB}" 2>/dev/null | tr '\n' ' ')
+    for CNAME_PATTERN in "${!CNAME_VENDORS[@]}"; do
+      if echo "$CNAMES" | grep -qi "$CNAME_PATTERN" 2>/dev/null; then
+        IFS='|' read -r VTECH VCAT <<< "${CNAME_VENDORS[$CNAME_PATTERN]}"
+        _save_tech "$SUB" "$VTECH" "" "$VCAT" "cname_detection"
+        break
+      fi
+    done
+
+    # ── Fetch body + headers (una sola petición) ─────────────
+    local RESP BODY HEADERS HTTP_TITLE
+    RESP=$(curl -sL --max-time 12 --compressed -D - "https://${SUB}" 2>/dev/null | head -c 80000)
+    HEADERS=$(echo "$RESP" | sed -n '1,/^\r\{0,1\}$/p')
+    BODY=$(echo "$RESP" | sed '1,/^\r\{0,1\}$/d')
+
+    # ── Título de página como señal de tech ──────────────────
+    HTTP_TITLE=$(echo "$BODY" | grep -oiP '(?<=<title[^>]*>)[^<]+' | head -1 | tr -d '\r\n' | xargs 2>/dev/null || true)
+
+    # ── Body patterns: TECH|CATEGORY|DETECTION_REGEX|VERSION_REGEX_OR_EMPTY ──
+    # VERSION_REGEX: si se proporciona, se extrae con grep -oP y es el valor de versión.
+    # Si está vacío, solo se detecta presencia (sin versión).
+    local -a BODY_PATTERNS=(
+      "Looker|BI Platform|lookerVersion:\s*'[^']+'|(?<=lookerVersion: ')[^']+(?=')"
+      "Looker|BI Platform|window\.GADATA\s*=|"
+      "Grafana|Monitoring|\"appUrl\":\"[^\"]+grafana|\"version\":\"([0-9.]+)\",\"commit\""
+      "Metabase|BI Platform|<meta name=\"metabase-version\"|(?<=content=\")[0-9][^\"]+(?=\")"
+      "Kibana|Analytics|\"version\":\{\"number\":\"[^\"]+\"|(?<=\"number\":\")[0-9][^\"]+(?=\")"
+      "Retool|Low-Code Platform|window\.RETOOL_CONFIG\s*=|"
+      "Superset|BI Platform|window\.SUPERSET_BOOTSTRAP_DATA|"
+      "Redash|BI Platform|<div id=\"redash-app\"|"
+      "Jupyter|Notebook|<title>Jupyter|"
+      "Airflow|Workflow|<title>Airflow|"
+      "Jenkins|CI/CD|<title>Dashboard \[Jenkins\]|"
+      "GitLab|DevOps|<meta content=\"GitLab\"|"
+      "Confluence|Wiki|<meta name=\"application-name\" content=\"Confluence\"|"
+      "Jira|Project Mgmt|<meta name=\"application-name\" content=\"JIRA\"|"
+      "Sentry|Monitoring|window\.__initialData.*sentry|"
+      "Datadog|Monitoring|DD_RUM\.init\(\{|"
+      "New Relic|Monitoring|NREUM\.loader_config|"
+      "Segment|Analytics|analytics\.load\s*\(|"
+      "Mixpanel|Analytics|mixpanel\.init\s*\(|"
+      "LaunchDarkly|Feature Flags|window\.LDClient\b|"
+      "Stripe|Payments|js\.stripe\.com/v[0-9]|"
+      "Twilio|Communications|twilio\.com/js|"
+      "Auth0|Identity|auth0\.com/auth|"
+      "Okta|Identity|okta\.com/app|"
+      "Shopify|E-Commerce|Shopify\.theme|"
+      "WordPress|CMS|<meta name=\"generator\" content=\"WordPress|(?<=WordPress )[\d.]+(?=\")"
+      "Drupal|CMS|Drupal\.settings\b|"
+      "Next.js|Framework|__NEXT_DATA__\b|"
+      "Nuxt.js|Framework|window\.__NUXT__|"
+      "React|Framework|__reactFiber|"
+      "Angular|Framework|ng-version=|(?<=ng-version=\")[0-9][^\"]+(?=\")"
+      "Vue.js|Framework|__vue_app__|"
+      "Svelte|Framework|__svelte\b|"
+    )
+
+    for BPAT in "${BODY_PATTERNS[@]}"; do
+      IFS='|' read -r BTECH BCAT DETECT_RE VER_RE <<< "$BPAT"
+      if echo "$BODY" | grep -qP "$DETECT_RE" 2>/dev/null; then
+        local BVER=""
+        if [[ -n "$VER_RE" ]]; then
+          BVER=$(echo "$BODY" | grep -oP "$VER_RE" | head -1 | tr -d '\r\n' || true)
+        fi
+        _save_tech "$SUB" "$BTECH" "$BVER" "$BCAT" "custom_fingerprint"
+      fi
+    done
+
+    # ── Header patterns ───────────────────────────────────────
+    local -a HEADER_PATTERNS=(
+      "Looker|BI Platform|csp/looker/"
+      "WordPress|CMS|X-Powered-By: W3 Total Cache"
+      "Drupal|CMS|X-Generator: Drupal"
+      "PHP|Language|X-Powered-By: PHP/([0-9.]+)"
+      "ASP.NET|Framework|X-Powered-By: ASP.NET"
+      "Express.js|Framework|X-Powered-By: Express"
+      "Ruby on Rails|Framework|X-Powered-By: Phusion Passenger"
+    )
+
+    for HPAT in "${HEADER_PATTERNS[@]}"; do
+      IFS='|' read -r HTECH HCAT HREGEX <<< "$HPAT"
+      if echo "$HEADERS" | grep -qiP "$HREGEX" 2>/dev/null; then
+        local HVER
+        HVER=$(echo "$HEADERS" | grep -oiP "$HREGEX" | grep -oP '[0-9][0-9.]+' | head -1 || true)
+        _save_tech "$SUB" "$HTECH" "$HVER" "$HCAT" "header_fingerprint"
+      fi
+    done
+
+    # ── Title-based detection (último recurso) ────────────────
+    if [[ -n "$HTTP_TITLE" ]]; then
+      case "${HTTP_TITLE,,}" in
+        *looker*)   _save_tech "$SUB" "Looker" "" "BI Platform" "title_detection" ;;
+        *grafana*)  _save_tech "$SUB" "Grafana" "" "Monitoring" "title_detection" ;;
+        *kibana*)   _save_tech "$SUB" "Kibana" "" "Analytics" "title_detection" ;;
+        *jenkins*)  _save_tech "$SUB" "Jenkins" "" "CI/CD" "title_detection" ;;
+        *gitlab*)   _save_tech "$SUB" "GitLab" "" "DevOps" "title_detection" ;;
+        *jira*)     _save_tech "$SUB" "Jira" "" "Project Mgmt" "title_detection" ;;
+        *confluence*) _save_tech "$SUB" "Confluence" "" "Wiki" "title_detection" ;;
+        *datadog*)  _save_tech "$SUB" "Datadog" "" "Monitoring" "title_detection" ;;
+        *airflow*)  _save_tech "$SUB" "Airflow" "" "Workflow" "title_detection" ;;
+        *jupyter*)  _save_tech "$SUB" "Jupyter" "" "Notebook" "title_detection" ;;
+        *superset*) _save_tech "$SUB" "Superset" "" "BI Platform" "title_detection" ;;
+      esac
+    fi
+
+  done < "$ALIVE"
+
+  [[ "$CUSTOM_COUNT" -gt 0 ]] && log_ok "Custom fingerprints: $CUSTOM_COUNT detecciones"
+
+  # ── Capa 5: Generic version leakage — detecta versiones en body/headers/endpoints ──
+  # Lógica: si el nombre tech ya existe en DB (sin versión) → actualiza.
+  #         si es desconocido → inserta como nueva entrada para que AI lo analice.
+  log_info "Version leakage scan (body patterns + version endpoints)..."
+  local VLEAK_COUNT=0
+
+  _upsert_version() {
+    local SUB_="$1" TECH_="$2" VER_="$3" CAT_="${4:-Unknown}" SRC_="${5:-version_leakage}"
+    [[ -z "$VER_" || -z "$TECH_" ]] && return
+
+    # ¿Ya tenemos esta tech sin versión? → actualizar
+    local EXISTING
+    EXISTING=$(sqlite3 "$DB_PATH" \
+      "SELECT id FROM technologies
+       WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUB_//\'/\'\'}'
+         AND tech_name='${TECH_//\'/\'\'}' AND (tech_version='' OR tech_version IS NULL)
+       LIMIT 1;" 2>/dev/null || echo "")
+
+    if [[ -n "$EXISTING" ]]; then
+      sqlite3 "$DB_PATH" \
+        "UPDATE technologies SET tech_version='${VER_//\'/\'\'}', source='${SRC_}'
+         WHERE id=${EXISTING};" 2>/dev/null || true
+      log_info "  ↳ Version actualizada: $TECH_ → $VER_ ($SUB_)"
+    else
+      # Tech nueva — insertar (puede ser software desconocido)
+      sqlite3 "$DB_PATH" \
+        "INSERT OR IGNORE INTO technologies
+           (domain_id, url, subdomain, tech_name, tech_version, category, confidence, source)
+         VALUES(${DOMAIN_ID}, 'https://${SUB_}', '${SUB_}',
+           '${TECH_//\'/\'\'}', '${VER_//\'/\'\'}',
+           '${CAT_//\'/\'\'}', 70, '${SRC_}');" 2>/dev/null || true
+      log_info "  ↳ Tech nueva: $TECH_ $VER_ ($SUB_)"
+    fi
+    ((VLEAK_COUNT++))
+  }
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+
+    # Fetch login/root page (una petición, headers + body)
+    local VRESP VBODY VHEADERS
+    VRESP=$(curl -sL --max-time 12 --compressed -D - "https://${SUB}" 2>/dev/null | head -c 100000)
+    VHEADERS=$(echo "$VRESP" | sed -n '1,/^\r\{0,1\}$/p')
+    VBODY=$(echo "$VRESP" | sed '1,/^\r\{0,1\}$/d')
+
+    # ── 1. Header: X-Powered-By: Tech/version ────────────────
+    local XPB
+    XPB=$(echo "$VHEADERS" | grep -oi 'X-Powered-By:[^\r\n]*' | head -1 || true)
+    if [[ -n "$XPB" ]]; then
+      # Forma "Tech/1.2.3"
+      local XPB_TECH XPB_VER
+      XPB_TECH=$(echo "$XPB" | grep -oP '(?<=X-Powered-By:\s)[^/\r\n]+' | xargs || true)
+      XPB_VER=$(echo "$XPB"  | grep -oP '(?<=/)[0-9][^\s\r\n]+' | head -1 || true)
+      [[ -n "$XPB_TECH" ]] && _upsert_version "$SUB" "$XPB_TECH" "$XPB_VER" "Language/Framework" "header_xpoweredby"
+    fi
+
+    # ── 2. Meta generator: <meta name="generator" content="Tech x.y.z"> ──
+    local GEN
+    GEN=$(echo "$VBODY" | grep -oiP '<meta[^>]+name="generator"[^>]+>' | head -3 || true)
+    [[ -z "$GEN" ]] && GEN=$(echo "$VBODY" | grep -oiP "<meta[^>]+name='generator'[^>]+>" | head -3 || true)
+    while IFS= read -r GTAG; do
+      [[ -z "$GTAG" ]] && continue
+      local GCONTENT
+      GCONTENT=$(echo "$GTAG" | grep -oiP 'content="[^"]+"' | tr -d '"' | sed 's/^content=//i' | head -1 || true)
+      [[ -z "$GCONTENT" ]] && GCONTENT=$(echo "$GTAG" | grep -oiP "content='[^']+'" | tr -d "'" | sed "s/^content=//i" | head -1 || true)
+      if [[ -n "$GCONTENT" ]]; then
+        local GTECH GVER
+        GTECH=$(echo "$GCONTENT" | grep -oP '^[^\d]+' | xargs || true)
+        GVER=$(echo "$GCONTENT"  | grep -oP '[0-9][0-9.]+' | head -1 || true)
+        [[ -n "$GTECH" ]] && _upsert_version "$SUB" "$GTECH" "$GVER" "CMS" "meta_generator"
+      fi
+    done <<< "$GEN"
+
+    # ── 3. Meta *-version tags: <meta name="app-version" content="1.2.3"> ──
+    while IFS= read -r MVTAG; do
+      [[ -z "$MVTAG" ]] && continue
+      local MV_NAME MV_VER
+      # Extraer name= y content= sin lookaheads (evita bug bash en $() con paréntesis en single-quoted)
+      MV_NAME=$(echo "$MVTAG" | grep -oiP 'name="[^"]+"' | tr -d '"' | sed 's/^name=//i; s/-version$//i' | xargs || true)
+      MV_VER=$(echo "$MVTAG"  | grep -oiP 'content="[0-9][^"]{1,30}"' | tr -d '"' | sed 's/^content=//i' | head -1 || true)
+      [[ -n "$MV_NAME" && -n "$MV_VER" ]] && _upsert_version "$SUB" "$MV_NAME" "$MV_VER" "Unknown" "meta_version_tag"
+    done < <(echo "$VBODY" | grep -oiP '<meta[^>]+name="[^"]*version[^"]*"[^>]+>' | head -5)
+
+    # ── 4. HTML comments: <!-- v2.3.1 --> or <!-- version: 2.3.1 --> ──
+    local COMMENT_VER
+    COMMENT_VER=$(echo "$VBODY" | grep -oP '<!--[^->]*[0-9]+\.[0-9]+[^->]{0,10}' \
+      | grep -oP '[0-9]+\.[0-9]+[^ >-]{0,10}' | head -1 || true)
+    if [[ -n "$COMMENT_VER" ]]; then
+      local HTITLE
+      HTITLE=$(echo "$VBODY" | grep -oiP '<title[^>]*>[^<]+' | sed 's/<title[^>]*>//i' | head -1 | xargs || true)
+      [[ -n "$HTITLE" ]] && _upsert_version "$SUB" "$HTITLE" "$COMMENT_VER" "Unknown" "html_comment"
+    fi
+
+    # ── 5. Generic JS window.X = {version: 'N.N.N'} patterns ──
+    while IFS= read -r JSLINE; do
+      [[ -z "$JSLINE" ]] && continue
+      local JS_VARNAME JS_VER
+      JS_VARNAME=$(echo "$JSLINE" | grep -oP 'window\.[A-Z][A-Z0-9_]+' | sed 's/window\.//' | head -1 || true)
+      JS_VER=$(echo "$JSLINE" | grep -oP '"version"\s*:\s*"[0-9][^"]{1,20}"' | tr -d '"' | sed 's/version\s*:\s*//' | head -1 || true)
+      [[ -z "$JS_VER" ]] && JS_VER=$(echo "$JSLINE" | grep -oP "[']version[']\s*:\s*'[0-9][^']{1,20}'" | tr -d "'" | sed "s/version\s*:\s*//" | head -1 || true)
+      [[ -z "$JS_VER" ]] && JS_VER=$(echo "$JSLINE" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+      [[ -n "$JS_VARNAME" && -n "$JS_VER" ]] && _upsert_version "$SUB" "$JS_VARNAME" "$JS_VER" "Unknown" "js_global_var"
+    done < <(echo "$VBODY" | grep -oP 'window\.[A-Z][A-Z0-9_]+\s*=\s*\{[^}]{0,300}version[^}]{0,100}\}' | head -10)
+
+    # ── 6. Probe version-exposing endpoints ──────────────────
+    local -a VER_ENDPOINTS=(
+      "/api/version" "/version" "/version.json" "/api/v1/version" "/api/v2/version"
+      "/actuator/info" "/actuator/health" "/health" "/healthz" "/status"
+      "/_version" "/_info" "/info" "/api/info" "/api/health"
+      "/api/status" "/app/version" "/build-info" "/buildInfo"
+    )
+
+    for VPATH in "${VER_ENDPOINTS[@]}"; do
+      local VRESP_EP
+      VRESP_EP=$(curl -s --max-time 6 -H "Accept: application/json" \
+        "https://${SUB}${VPATH}" 2>/dev/null | head -c 4000)
+      [[ -z "$VRESP_EP" ]] && continue
+
+      # Solo procesar si parece JSON con version
+      echo "$VRESP_EP" | grep -qiP '"version"' || continue
+
+      # Extraer version
+      local EP_VER
+      EP_VER=$(echo "$VRESP_EP" | grep -oP '"version"\s*:\s*"[0-9][^"]{1,30}"' | tr -d '"' | sed 's/version\s*:\s*//' | head -1 || true)
+      [[ -z "$EP_VER" ]] && EP_VER=$(echo "$VRESP_EP" | grep -oP "[']version[']\s*:\s*'[0-9][^']{1,30}'" | tr -d "'" | sed "s/version\s*:\s*//" | head -1 || true)
+      [[ -z "$EP_VER" ]] && continue
+
+      # Extraer nombre de la app del JSON si existe
+      local EP_NAME
+      EP_NAME=$(echo "$VRESP_EP" | grep -oP '"(name|app|application|service)"\s*:\s*"[^"]{1,40}"' | sed 's/.*:\s*"//; s/"$//' | head -1 || true)
+      [[ -z "$EP_NAME" ]] && EP_NAME="$SUB"
+
+      log_info "  ↳ Version endpoint $VPATH: $EP_NAME $EP_VER"
+      _upsert_version "$SUB" "$EP_NAME" "$EP_VER" "Unknown" "version_endpoint:$VPATH"
+      break  # Un endpoint con versión es suficiente por subdominio
+    done
+
+  done < "$ALIVE"
+
+  [[ "$VLEAK_COUNT" -gt 0 ]] && log_ok "Version leakage: $VLEAK_COUNT versiones extraídas"
 
   # ── Resumen en log ────────────────────────────────────────
   TOTAL_FOUND=$(sqlite3 "$DB_PATH" \

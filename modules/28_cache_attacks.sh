@@ -145,10 +145,10 @@ _test_cache_poisoning() {
     RESPONSE_HEADERS=$(curl -sI --max-time 10 ${PROXY_FLAG} \
       -H "${HEADER}: ${CANARY}" \
       "$TEST_URL" 2>/dev/null)
-    BODY=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+    BODY=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
       -H "${HEADER}: ${CANARY}" \
       "$TEST_URL" 2>/dev/null | head -c 5000)
-    STATUS=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
       -H "${HEADER}: ${CANARY}" \
       -o /dev/null -w "%{http_code}" \
       "$TEST_URL" 2>/dev/null)
@@ -159,9 +159,8 @@ _test_cache_poisoning() {
 
       # Verificar si la respuesta se cacheó
       # Hacer una segunda petición SIN el header y ver si sigue el canary
-      sleep 1
       local BODY2
-      BODY2=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+      BODY2=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
         "$TEST_URL" 2>/dev/null | head -c 5000)
 
       if echo "$BODY2" | grep -qF "$CANARY"; then
@@ -187,15 +186,14 @@ _test_cache_poisoning() {
       fi
     fi
 
-    # Rate limit — no saturar
-    sleep 0.5
   done
 
   # Nuclei templates de cache poisoning
   if command -v nuclei &>/dev/null; then
-    nuclei -u "$BASE_URL" \
+    timeout 120 nuclei -u "$BASE_URL" \
       -tags "cache,cache-poisoning,host-header" \
       -severity "medium,high,critical" \
+      -timeout 10 \
       -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
@@ -271,7 +269,7 @@ PATHS
 
     # Verificar que el endpoint existe y da 200 (o redirige)
     local DYN_STATUS
-    DYN_STATUS=$(curl -sL --max-time 8 ${PROXY_FLAG} \
+    DYN_STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${PROXY_FLAG} \
       -o /dev/null -w "%{http_code}" "$DYN_URL" 2>/dev/null)
     [[ "$DYN_STATUS" != "200" && "$DYN_STATUS" != "302" && "$DYN_STATUS" != "301" ]] && continue
 
@@ -283,7 +281,7 @@ PATHS
         local TEST_URL="${DYN_URL}${DELIM}${CB}.${EXT}"
 
         local BODY RESP_HEADERS STATUS
-        STATUS=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+        STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
           -o /tmp/.wcd_test_$$ \
           -D /tmp/.wcd_headers_$$ \
           -w "%{http_code}" "$TEST_URL" 2>/dev/null)
@@ -322,7 +320,6 @@ PATHS
             break 2  # Basta con confirmar en este endpoint
           fi
         fi
-        sleep 0.3
       done
     done
 
@@ -336,7 +333,7 @@ PATHS
         local TEST_URL="${DYN_URL}/..%2F${STATIC_DIR}%2F${CB}.${EXT}"
 
         local STATUS RESP_HEADERS BODY
-        STATUS=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+        STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
           --path-as-is \
           -o /tmp/.wcd_b_$$ \
           -D /tmp/.wcd_bh_$$ \
@@ -373,7 +370,7 @@ PATHS
       local TEST_URL="${DYN_URL}/${CB}.${EXT}"
 
       local STATUS RESP_HEADERS BODY
-      STATUS=$(curl -sL --max-time 10 ${PROXY_FLAG} \
+      STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
         -o /tmp/.wcd_c_$$ \
         -D /tmp/.wcd_ch_$$ \
         -w "%{http_code}" "$TEST_URL" 2>/dev/null)
@@ -401,14 +398,13 @@ PATHS
       break
     done
 
-    sleep 1  # Entre endpoints — respetuoso con el servidor
-
   done <<< "$DYNAMIC_PATHS"
 
   # Nuclei para cache deception
   if command -v nuclei &>/dev/null; then
-    nuclei -u "$BASE_URL" \
+    timeout 120 nuclei -u "$BASE_URL" \
       -tags "cache-deception,web-cache-deception" \
+      -timeout 10 \
       -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue

@@ -14,7 +14,7 @@ MODULE_DESC="Inferencia y tests de lógica de negocio"
 
 # ── Patrones de entidades de negocio ─────────────────────────
 # Formato: "TIPO|patrones de path/param separados por coma"
-declare -A ENTITY_PATTERNS=(
+declare -gA ENTITY_PATTERNS=(
   [payment]="payment,checkout,cart,order,purchase,buy,billing,invoice,charge,refund,stripe,paypal,braintree"
   [coupon]="coupon,discount,promo,voucher,code,offer,deal,rebate,redeem"
   [role]="role,permission,admin,privilege,access,scope,tier,plan,level,grant"
@@ -30,15 +30,25 @@ declare -A ENTITY_PATTERNS=(
 # ── Detectar entidades en URLs y params ───────────────────────
 _detect_entities() {
   local DOMAIN_ID="$1"
+  local SINGLE_SUB="${2:-}"  # optional: restrict to specific host
   local ENTITIES_FOUND=()
+
+  local HOST_FILTER=""
+  local PARAM_HOST_FILTER=""
+  if [[ -n "$SINGLE_SUB" ]]; then
+    HOST_FILTER="AND (url LIKE 'https://${SINGLE_SUB}/%' OR url LIKE 'https://${SINGLE_SUB}?%' OR url = 'https://${SINGLE_SUB}')"
+    PARAM_HOST_FILTER="AND (url LIKE 'https://${SINGLE_SUB}/%' OR url LIKE 'https://${SINGLE_SUB}?%' OR url = 'https://${SINGLE_SUB}')"
+  fi
 
   # Leer todas las URLs y params del dominio
   local ALL_URLS
   ALL_URLS=$(sqlite3 "$DB_PATH" \
-    "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID};" 2>/dev/null)
+    "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID} ${HOST_FILTER};" 2>/dev/null)
   local ALL_PARAMS
   ALL_PARAMS=$(sqlite3 "$DB_PATH" \
-    "SELECT DISTINCT param_name FROM url_params WHERE domain_id=${DOMAIN_ID};" 2>/dev/null)
+    "SELECT DISTINCT p.param_name FROM url_params p
+     JOIN urls u ON (u.url = p.url OR u.url LIKE p.url || '?%')
+     WHERE p.domain_id=${DOMAIN_ID} ${PARAM_HOST_FILTER/AND (url/AND (u.url};" 2>/dev/null)
   local ALL_ENDPOINTS
   ALL_ENDPOINTS=$(sqlite3 "$DB_PATH" \
     "SELECT DISTINCT endpoint FROM js_endpoints WHERE domain_id=${DOMAIN_ID};" 2>/dev/null)
@@ -285,30 +295,54 @@ _test_role_entity() {
      LIMIT 10;" 2>/dev/null)
 
   # También endpoints /admin/* que resuelven sin autenticación
+  # Excluir rutas de auth — devolver 200 en login/signin es normal
   local ADMIN_URLS
   ADMIN_URLS=$(sqlite3 "$DB_PATH" \
     "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID}
      AND (url LIKE '%/admin%' OR url LIKE '%/administrator%'
           OR url LIKE '%/superuser%' OR url LIKE '%/root%')
+     AND url NOT LIKE '%/auth/%' AND url NOT LIKE '%/login%'
+     AND url NOT LIKE '%/signin%' AND url NOT LIKE '%/sign_in%'
+     AND url NOT LIKE '%/logout%'
      LIMIT 10;" 2>/dev/null)
 
   local ALL_ROLE_URLS
-  ALL_ROLE_URLS=$(echo -e "$ROLE_URLS\n$ADMIN_URLS" | sort -u)
+  # Excluir también las URLs de role_urls que sean rutas de auth
+  ALL_ROLE_URLS=$(echo -e "$ROLE_URLS\n$ADMIN_URLS" | sort -u \
+    | grep -ivP '/(auth|login|signin|sign_in|logout)(/|$|\?)' || true)
 
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
-    local STATUS
-    STATUS=$(curl -sL --max-time 8 "$URL" -o /dev/null -w "%{http_code}" 2>/dev/null)
 
-    if [[ "$STATUS" == "200" ]]; then
-      log_warn "  ⚡ Endpoint admin/role accesible: $URL (HTTP 200)"
-      sqlite3 "$DB_PATH" \
-        "INSERT INTO business_tests(domain_id,entity_id,test_type,target_url,result,detail)
-         VALUES(${DOMAIN_ID},${ENTITY_ID},'unauthorized_access','${URL//\'/\'\'}',
-                'interesting','Admin endpoint HTTP 200 sin auth verificada');" 2>/dev/null || true
-      db_add_finding "$DOMAIN_ID" "business_logic" "high" \
-        "$URL" "unauthorized_admin" "Endpoint admin accesible (HTTP 200)"
+    local RESPONSE HTTP_STATUS BODY
+    RESPONSE=$(curl -sL --max-time 8 "$URL" \
+      -w "\n###STATUS###%{http_code}" 2>/dev/null)
+    HTTP_STATUS=$(echo "$RESPONSE" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
+    BODY=$(echo "$RESPONSE" | sed '/###STATUS###/d')
+
+    [[ "$HTTP_STATUS" != "200" ]] && continue
+
+    # Si el body contiene un formulario de login o redirect JS, es FP
+    # Cubre: HTML login form, cualquier window.location redirect, meta-refresh, texto auth típico
+    if echo "$BODY" | grep -qiP 'type="password"|type='"'"'password'"'"'|window\.location(\.(href|replace|assign))?\s*[=\(]|you must (sign|log) in|<meta[^>]+refresh[^>]*(login|signin)|location\.href\s*='; then
+      continue
     fi
+    # Body vacío o demasiado pequeño → JS-rendered, no verificable sin headless
+    if [[ "${#BODY}" -lt 300 ]]; then
+      continue
+    fi
+    # Si el body parece ser solo un script de redirect (< 2KB y contiene location)
+    if [[ "${#BODY}" -lt 2000 ]] && echo "$BODY" | grep -qi 'location'; then
+      continue
+    fi
+
+    log_warn "  ⚡ Endpoint admin/role accesible: $URL (HTTP 200)"
+    sqlite3 "$DB_PATH" \
+      "INSERT INTO business_tests(domain_id,entity_id,test_type,target_url,result,detail)
+       VALUES(${DOMAIN_ID},${ENTITY_ID},'unauthorized_access','${URL//\'/\'\'}',
+              'interesting','Admin endpoint HTTP 200 sin login form');" 2>/dev/null || true
+    db_add_finding "$DOMAIN_ID" "business_logic" "high" \
+      "$URL" "unauthorized_admin" "Endpoint admin accesible sin formulario de login (HTTP 200)"
 
     # Sugerencia de AI para escalada de roles
     sqlite3 "$DB_PATH" \
@@ -379,10 +413,17 @@ module_run() {
 
   log_phase "Módulo 21 — $MODULE_DESC: $DOMAIN"
 
+  # Detect single-target mode for scoping
+  local ALIVE_FILE="$OUT_DIR/subs_alive.txt"
+  local _SINGLE_SUB=""
+  if [[ -s "$ALIVE_FILE" && "$(wc -l < "$ALIVE_FILE" | tr -d ' ')" == "1" ]]; then
+    _SINGLE_SUB=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
+  fi
+
   # ── Detectar entidades ─────────────────────────────────────
   log_info "Inferiendo modelo de negocio..."
   local ENTITIES
-  mapfile -t ENTITIES < <(_detect_entities "$DOMAIN_ID")
+  mapfile -t ENTITIES < <(_detect_entities "$DOMAIN_ID" "$_SINGLE_SUB")
 
   if [[ ${#ENTITIES[@]} -eq 0 ]]; then
     log_info "No se detectaron entidades de negocio relevantes"

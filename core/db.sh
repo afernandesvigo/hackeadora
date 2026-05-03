@@ -9,8 +9,10 @@
 # ── Inicialización ────────────────────────────────────────────
 db_init() {
   mkdir -p "$(dirname "$DB_PATH")"
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=10000;
 PRAGMA foreign_keys=ON;
 
 -- Dominios raíz monitorizados
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS subdomains (
   first_seen  DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_seen   DATETIME DEFAULT CURRENT_TIMESTAMP,
   nuclei_done INTEGER DEFAULT 0,
+  blanket_403 INTEGER DEFAULT 0,
   UNIQUE(domain_id, subdomain)
 );
 
@@ -94,15 +97,23 @@ CREATE TABLE IF NOT EXISTS scan_history (
   summary     TEXT            -- JSON con stats del scan
 );
 SQL
+  # Migración: añadir columna blanket_403 a DBs existentes
+  sqlite3 "$DB_PATH" "ALTER TABLE subdomains ADD COLUMN blanket_403 INTEGER DEFAULT 0;" 2>/dev/null || true
+
   log_ok "Base de datos inicializada: $DB_PATH"
   db_init_js
 }
 
 # ── Helpers SQL ───────────────────────────────────────────────
-_db() { sqlite3 "$DB_PATH" "$@"; }
+# Ruta fija: idempotente entre subshells y watchdog (bash -c sourced fresh).
+# .timeout via init file porque PRAGMA busy_timeout produce output extra.
+_SQLITE_INIT="/tmp/.sqlite_init_hackeadora"
+printf ".timeout 15000\n" > "$_SQLITE_INIT" 2>/dev/null || true
+
+_db() { sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" "$@"; }
 
 _db_query() {
-  sqlite3 -separator '|' "$DB_PATH" "$@"
+  sqlite3 -init "$_SQLITE_INIT" -separator '|' "$DB_PATH" "$@"
 }
 
 # ── Dominios ──────────────────────────────────────────────────
@@ -125,9 +136,10 @@ db_add_subdomain() {
   local STATUS="${4:-unknown}"
   local HTTP="${5:-}"
   local TITLE="${6:-}"
+  local TITLE_ESC="${TITLE//\'/\'\'}"
 
   _db "INSERT OR IGNORE INTO subdomains(domain_id,subdomain,ip,status,http_status,title)
-       VALUES(${DOMAIN_ID},'${SUBDOMAIN}','${IP}','${STATUS}','${HTTP}','${TITLE}');
+       VALUES(${DOMAIN_ID},'${SUBDOMAIN}','${IP}','${STATUS}','${HTTP}','${TITLE_ESC}');
        UPDATE subdomains SET last_seen=CURRENT_TIMESTAMP
        WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUBDOMAIN}';"
 }
@@ -163,9 +175,24 @@ db_update_subdomain_status() {
   local HTTP="${4:-}"
   local IP="${5:-}"
   local TITLE="${6:-}"
+  local TITLE_ESC="${TITLE//\'/\'\'}"
   _db "UPDATE subdomains SET status='${STATUS}', http_status='${HTTP}',
-       ip='${IP}', title='${TITLE}', last_seen=CURRENT_TIMESTAMP
+       ip='${IP}', title='${TITLE_ESC}', last_seen=CURRENT_TIMESTAMP
        WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUBDOMAIN}';"
+}
+
+db_mark_blanket_403() {
+  local DOMAIN_ID="$1"
+  local SUBDOMAIN="$2"
+  _db "UPDATE subdomains SET blanket_403=1
+       WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUBDOMAIN//\'/\'\'}';"
+}
+
+db_is_blanket_403() {
+  local DOMAIN_ID="$1"
+  local SUBDOMAIN="$2"
+  _db "SELECT blanket_403 FROM subdomains
+       WHERE domain_id=${DOMAIN_ID} AND subdomain='${SUBDOMAIN//\'/\'\'}' LIMIT 1;"
 }
 
 # ── URLs ──────────────────────────────────────────────────────
@@ -174,25 +201,46 @@ db_add_url() {
   local URL="$2"
   local SOURCE="${3:-unknown}"
   local STATUS="${4:-}"
+  local URL_ESC="${URL//\'/\'\'}"
 
   _db "INSERT OR IGNORE INTO urls(domain_id,url,source,status_code)
-       VALUES(${DOMAIN_ID},'${URL}','${SOURCE}','${STATUS}');"
+       VALUES(${DOMAIN_ID},'${URL_ESC}','${SOURCE}','${STATUS}');"
 }
 
 # Devuelve 1 si la URL es nueva
 db_is_new_url() {
   local DOMAIN_ID="$1"
   local URL="$2"
+  local URL_ESC="${URL//\'/\'\'}"
   local COUNT
   COUNT=$(_db "SELECT COUNT(*) FROM urls
-               WHERE domain_id=${DOMAIN_ID} AND url='${URL}'
+               WHERE domain_id=${DOMAIN_ID} AND url='${URL_ESC}'
                AND date(first_seen) = date('now');")
   [[ "$COUNT" -gt 0 ]] && echo "1" || echo "0"
 }
 
 db_get_urls_nuclei_pending() {
   local DOMAIN_ID="$1"
-  _db_query "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID} AND nuclei_done=0;"
+  local HOST_FILTER="${2:-}"  # optional: restrict to specific host (e.g. sub.example.com)
+  local WHERE_EXTRA=""
+  if [[ -n "$HOST_FILTER" ]]; then
+    WHERE_EXTRA=" AND (url LIKE 'https://${HOST_FILTER}/%' OR url LIKE 'https://${HOST_FILTER}?%' OR url = 'https://${HOST_FILTER}'
+      OR url LIKE 'http://${HOST_FILTER}/%' OR url LIKE 'http://${HOST_FILTER}?%' OR url = 'http://${HOST_FILTER}')"
+  fi
+  # Prioridad: 1) URLs con parámetros (más superficie de ataque para sqli/xss/ssrf)
+  #            2) rutas API/admin/dashboard
+  #            3) resto alfabético
+  _db_query "SELECT url FROM urls WHERE domain_id=${DOMAIN_ID} AND nuclei_done=0${WHERE_EXTRA}
+    ORDER BY
+      CASE
+        WHEN url LIKE '%?%' THEN 0
+        WHEN url LIKE '%/api/%' OR url LIKE '%/v1/%' OR url LIKE '%/v2/%'
+          OR url LIKE '%/admin%' OR url LIKE '%/dashboard%'
+          OR url LIKE '%:8080%' OR url LIKE '%:8443%' OR url LIKE '%:8888%'
+          OR url LIKE '%:9090%' OR url LIKE '%:3000%' OR url LIKE '%:4000%' THEN 1
+        ELSE 2
+      END,
+      url;"
 }
 
 db_mark_url_nuclei_done() {
@@ -294,7 +342,7 @@ db_tech_stats() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_js() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Archivos JS descubiertos y analizados
@@ -348,7 +396,111 @@ CREATE INDEX IF NOT EXISTS idx_js_secrets_domain ON js_secrets(domain_id);
 CREATE INDEX IF NOT EXISTS idx_js_endpoints_dom  ON js_endpoints(domain_id);
 SQL
   log_ok "Tablas JS inicializadas"
+  db_init_js_api_configs
   db_init_surface
+}
+
+# ══════════════════════════════════════════════════════════════
+#  JS API Configs — configuración de autenticación extraída de bundles JS
+# ══════════════════════════════════════════════════════════════
+
+db_init_js_api_configs() {
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+PRAGMA journal_mode=WAL;
+
+-- Configuración de API extraída de bundles JS (Angular, React, Vue...)
+CREATE TABLE IF NOT EXISTS js_api_configs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain_id       INTEGER NOT NULL REFERENCES domains(id),
+  subdomain       TEXT NOT NULL,
+  js_url          TEXT NOT NULL,
+  api_base_url    TEXT,            -- ej: /app/api/v1/
+  auth_header     TEXT,            -- ej: Authentication (no Authorization)
+  auth_prefix     TEXT,            -- ej: Bearer
+  token_name      TEXT,            -- ej: ng2-webstorage|token
+  cookie_names    TEXT,            -- JSON array de nombres de cookies de sesión
+  roles           TEXT,            -- JSON array de roles detectados
+  login_url       TEXT,            -- endpoint de login relativo a api_base_url
+  login_body      TEXT,            -- JSON template del body de login
+  force_params    TEXT,            -- JSON object: parámetros extra de bypass (forceLogin:true)
+  endpoint_count  INTEGER DEFAULT 0,
+  extracted_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(domain_id, subdomain, js_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_jsapi_domain ON js_api_configs(domain_id);
+CREATE INDEX IF NOT EXISTS idx_jsapi_sub    ON js_api_configs(subdomain);
+SQL
+}
+
+db_upsert_api_config() {
+  local DOMAIN_ID="$1" SUBDOMAIN="$2" JS_URL="$3"
+  local API_BASE="${4:-}" AUTH_HDR="${5:-}" AUTH_PFX="${6:-Bearer}"
+  local TOKEN_NAME="${7:-}" COOKIE_NAMES="${8:-[]}" ROLES="${9:-[]}"
+  local LOGIN_URL="${10:-}" LOGIN_BODY="${11:-}" FORCE_PARAMS="${12}"
+  [[ -z "$FORCE_PARAMS" ]] && FORCE_PARAMS="{}"
+  local EP_COUNT="${13:-0}"
+
+  local S="$SUBDOMAIN"; S="${S//\'/\'\'}"
+  local J="$JS_URL";   J="${J//\'/\'\'}"
+  local A="$API_BASE"; A="${A//\'/\'\'}"
+  local H="$AUTH_HDR"; H="${H//\'/\'\'}"
+  local P="$AUTH_PFX"; P="${P//\'/\'\'}"
+  local T="$TOKEN_NAME"; T="${T//\'/\'\'}"
+  local C="$COOKIE_NAMES"; C="${C//\'/\'\'}"
+  local R="$ROLES"; R="${R//\'/\'\'}"
+  local L="$LOGIN_URL"; L="${L//\'/\'\'}"
+  local B="$LOGIN_BODY"; B="${B//\'/\'\'}"
+  local F="$FORCE_PARAMS"; F="${F//\'/\'\'}"
+
+  _db "INSERT INTO js_api_configs
+         (domain_id,subdomain,js_url,api_base_url,auth_header,auth_prefix,
+          token_name,cookie_names,roles,login_url,login_body,force_params,endpoint_count)
+       VALUES(${DOMAIN_ID},'${S}','${J}',
+              '${A}','${H}','${P}',
+              '${T}','${C}','${R}',
+              '${L}','${B}','${F}',${EP_COUNT})
+       ON CONFLICT(domain_id,subdomain,js_url) DO UPDATE SET
+         api_base_url=excluded.api_base_url,
+         auth_header=excluded.auth_header,
+         auth_prefix=excluded.auth_prefix,
+         token_name=excluded.token_name,
+         cookie_names=excluded.cookie_names,
+         roles=excluded.roles,
+         login_url=excluded.login_url,
+         login_body=excluded.login_body,
+         force_params=excluded.force_params,
+         endpoint_count=excluded.endpoint_count,
+         extracted_at=CURRENT_TIMESTAMP;"
+}
+
+db_get_api_configs() {
+  # Returns one JSON object per row — avoids field separator conflicts (token_name has '|')
+  local DOMAIN_ID="$1"
+  local SUB="${2:-}"
+  local WHERE="domain_id=${DOMAIN_ID}"
+  [[ -n "$SUB" ]] && WHERE="${WHERE} AND subdomain='${SUB//\'/\'\'}'"
+  _db "SELECT json_object(
+         'subdomain',   subdomain,
+         'js_url',      js_url,
+         'api_base',    COALESCE(api_base_url,''),
+         'auth_header', COALESCE(auth_header,''),
+         'auth_prefix', COALESCE(auth_prefix,'Bearer'),
+         'token_name',  COALESCE(token_name,''),
+         'cookies',     COALESCE(cookie_names,'[]'),
+         'roles',       COALESCE(roles,'[]'),
+         'login_url',   COALESCE(login_url,''),
+         'login_body',  COALESCE(login_body,''),
+         'force',       COALESCE(force_params,'{}')
+       )
+       FROM js_api_configs
+       WHERE ${WHERE}
+       ORDER BY
+         CASE WHEN login_url != '' THEN 0 ELSE 1 END,
+         CASE WHEN force_params != '{}' AND force_params IS NOT NULL THEN 0 ELSE 1 END,
+         CASE WHEN login_body LIKE '%identificador%' OR login_body LIKE '%username%' THEN 0 ELSE 1 END,
+         extracted_at DESC
+       LIMIT 1;"
 }
 
 # ── JS Files ──────────────────────────────────────────────────
@@ -419,7 +571,7 @@ db_mark_js_endpoints_queued() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_queue() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Cola de confirmaciones pendientes vía Telegram
@@ -498,7 +650,7 @@ db_queue_pending() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_surface() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Parámetros descubiertos por URL
@@ -571,7 +723,7 @@ SQL
 # ══════════════════════════════════════════════════════════════
 
 db_init_vault() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS auth_credentials (
@@ -657,7 +809,7 @@ db_vault_list() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_business() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Entidades de negocio inferidas del dominio
@@ -714,7 +866,7 @@ SQL
 # ══════════════════════════════════════════════════════════════
 
 db_init_acunetix() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Scans lanzados en Acunetix
@@ -764,7 +916,7 @@ SQL
 #  Blind XSS tables
 # ══════════════════════════════════════════════════════════════
 db_init_blindxss() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Payloads inyectados con su identificador único
@@ -797,7 +949,7 @@ SQL
 #  PoC Evidence table — almacena request/response reales
 # ══════════════════════════════════════════════════════════════
 db_init_poc() {
-  sqlite3 "$DB_PATH" <<'SQL'
+  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS poc_evidence (

@@ -42,6 +42,7 @@ declare -gA MODULE_TIMEOUTS=(
   [22_cors_check]=600          # 10 min
   [23_403_bypass]=600          # 10 min
   [24_http_smuggling]=900      # 15 min
+  [25_cms_scan]=1800           # 30 min — wpscan/joomscan por sub
   [26_path_confusion]=1800    # 30 min
   [27_blind_xss]=1200        # 20 min
   [28_cache_attacks]=1800    # 30 min — cache poisoning + deception

@@ -111,7 +111,6 @@ _inject_headers() {
       log_info "  ↪ Payload inyectado en header $HEADER ($PAYLOAD_ID)"
     fi
 
-    sleep 0.5  # Respetuoso con el servidor
   done
 }
 
@@ -177,7 +176,6 @@ _inject_forms() {
       log_info "  ↪ Payload inyectado en campo '$FIELD_NAME' ($PAYLOAD_ID)"
     fi
 
-    sleep 1  # Respetuoso — no enviar demasiado rápido
   done < <(echo "$HTML" | grep -ioP '<input[^>]+>' | head -20)
 
   # También textareas (comentarios, mensajes)
@@ -217,7 +215,6 @@ _inject_forms() {
       log_info "  ↪ Payload inyectado en textarea '$TA_NAME' ($PAYLOAD_ID)"
     fi
 
-    sleep 1
   done < <(echo "$HTML" | grep -ioP '<textarea[^>]+>' | head -10)
 }
 

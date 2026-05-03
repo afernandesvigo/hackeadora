@@ -98,6 +98,104 @@ def get_acunetix_findings(domain_id: int) -> list:
         except Exception:
             return []
 
+def get_technologies(domain_id: int) -> list:
+    """Stack tecnológico detectado con versiones — clave para CVEs específicos."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT tech_name, tech_version, category, subdomain,
+                          COUNT(*) as occurrences
+                   FROM technologies WHERE domain_id=?
+                   GROUP BY tech_name, tech_version
+                   ORDER BY occurrences DESC LIMIT 40""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_juicy_params(domain_id: int) -> list:
+    """Parámetros URL interesantes para SSRF, redirect, SQLi, etc."""
+    JUICY = {
+        'ssrf':     ['url','uri','path','dest','redirect','next','target','proxy',
+                     'callback','forward','host','return','returnUrl','returnTo'],
+        'sqli':     ['id','uid','user_id','order','sort','orderby','group','where',
+                     'filter','search','q','query'],
+        'idor':     ['id','user','account','profile','record','object','key','ref'],
+        'xss':      ['q','s','search','lang','template','name','message','text',
+                     'comment','title','description'],
+        'debug':    ['debug','test','dev','staging','admin','internal','verbose',
+                     'trace','log','dump'],
+    }
+    all_juicy = {p for ps in JUICY.values() for p in ps}
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT param_name, url FROM url_params WHERE domain_id=? LIMIT 200",
+                (domain_id,)
+            ).fetchall()
+            result = []
+            for r in rows:
+                pname = r['param_name'].lower().rstrip('[]')
+                categories = [cat for cat, params in JUICY.items() if pname in params]
+                if categories:
+                    result.append({
+                        'param': r['param_name'],
+                        'url': r['url'],
+                        'categories': categories,
+                    })
+            return result[:30]
+        except Exception:
+            return []
+
+def get_js_secrets(domain_id: int) -> list:
+    """Secrets encontrados en JS — claves API, tokens, etc."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT secret_type, secret_value, js_url, severity, context
+                   FROM js_secrets WHERE domain_id=?
+                   ORDER BY CASE severity
+                     WHEN 'critical' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
+                   LIMIT 20""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_subdomain_info(domain_id: int) -> list:
+    """Subdominios alive con título y tech detectada."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT subdomain, http_status, title, tech
+                   FROM subdomains WHERE domain_id=? AND status='alive'
+                   ORDER BY http_status LIMIT 30""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_login_forms(domain_id: int) -> list:
+    """Login forms detectados — OAuth, SAML, SSO, password forms."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT url, subdomain, login_type, http_status, page_title,
+                          form_action, input_fields, tech_hints
+                   FROM login_forms WHERE domain_id=?
+                   ORDER BY CASE login_type
+                     WHEN 'oauth' THEN 1 WHEN 'saml' THEN 2 WHEN 'sso' THEN 3
+                     WHEN 'api_auth' THEN 4 ELSE 5 END
+                   LIMIT 20""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
 def get_ai_suggestions(domain_id: int, status: str = "pending") -> list:
     with db_conn() as conn:
         try:
@@ -192,8 +290,13 @@ def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
     entities       = get_business_entities(domain_id)
     suggestions    = get_ai_suggestions(domain_id)
     acx_findings   = get_acunetix_findings(domain_id)
+    technologies   = get_technologies(domain_id)
+    juicy_params   = get_juicy_params(domain_id)
+    js_secrets     = get_js_secrets(domain_id)
+    subdomains     = get_subdomain_info(domain_id)
+    login_forms    = get_login_forms(domain_id)
 
-    if not findings and not entities and not suggestions:
+    if not findings and not entities and not technologies and not subdomains:
         print(f"  Sin datos suficientes para analizar {domain}")
         return []
 
@@ -215,9 +318,46 @@ def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
         for s in suggestions[:10]
     ], ensure_ascii=False)
 
-    system = """Eres un experto en bug bounty y seguridad ofensiva.
-Analiza los datos de recon de una aplicación web y propón de forma concisa
-dónde el análisis con IA aportaría más valor que las herramientas automáticas.
+    # Nuevo contexto enriquecido
+    tech_summary = json.dumps([
+        {"tech": t["tech_name"],
+         "version": t["tech_version"] or "unknown",
+         "category": t.get("category", ""),
+         "subdomain": t.get("subdomain", "")}
+        for t in technologies
+    ], ensure_ascii=False)
+
+    params_summary = json.dumps([
+        {"param": p["param"], "categories": p["categories"],
+         "url": p["url"][:80]}
+        for p in juicy_params
+    ], ensure_ascii=False)
+
+    secrets_summary = json.dumps([
+        {"type": s["secret_type"], "severity": s["severity"],
+         "url": s["js_url"][:80], "context": (s.get("context") or "")[:60]}
+        for s in js_secrets
+    ], ensure_ascii=False)
+
+    subs_summary = json.dumps([
+        {"subdomain": s["subdomain"], "status": s["http_status"],
+         "title": s.get("title", ""), "tech": s.get("tech", "")}
+        for s in subdomains
+    ], ensure_ascii=False)
+
+    login_summary = json.dumps([
+        {"url": f["url"][:80], "type": f["login_type"],
+         "status": f["http_status"], "fields": f.get("input_fields", ""),
+         "tech": f.get("tech_hints", ""), "title": (f.get("page_title") or "")[:60]}
+        for f in login_forms
+    ], ensure_ascii=False)
+
+    system = """Eres un experto en bug bounty y seguridad ofensiva con conocimiento profundo de CVEs,
+técnicas de explotación y plataformas SaaS/enterprise (Looker, Salesforce, ServiceNow, Grafana, etc.).
+Dado el stack tecnológico detectado y los findings de recon, propón ataques ESPECÍFICOS y ACCIONABLES:
+menciona CVEs concretos si aplican, endpoints reales a probar, técnicas específicas para esa versión.
+NO des consejos genéricos ("prueba CORS") — da pasos concretos ("en Looker <7.x, el endpoint /api/3.0/login
+acepta username enumeration vía timing diferencial en el error 401").
 Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 
     acx_summary = json.dumps([
@@ -227,33 +367,51 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 
     prompt = f"""Dominio: {domain}
 
-Findings de Hackeadora (recon + nuclei + smart scan):
+## Stack tecnológico detectado (con versiones):
+{tech_summary}
+
+## Subdominios alive:
+{subs_summary}
+
+## Findings de Hackeadora (recon + nuclei + smart scan):
 {findings_summary}
 
-Findings de Acunetix (DAST):
+## Findings de Acunetix (DAST):
 {acx_summary}
 
-Entidades de negocio detectadas:
+## Parámetros URL interesantes (potencial SSRF/SQLi/IDOR/redirect):
+{params_summary}
+
+## Secrets encontrados en JS:
+{secrets_summary}
+
+## Login forms / Auth endpoints detectados:
+{login_summary}
+
+## Entidades de negocio detectadas:
 {entities_summary}
 
-Sugerencias pendientes:
-{suggestions_summary}
+Con este contexto, identifica las vulnerabilidades más probables en ESTE stack específico.
+Si detectas software conocido (Looker, Grafana, Jenkins, etc.), menciona CVEs o técnicas
+de ataque conocidas para esa versión exacta.
 
 Devuelve un JSON con esta estructura exacta:
 {{
+  "tech_stack_analysis": "análisis del stack en 2-3 frases, mencionando software concreto y riesgos conocidos",
   "depth_opportunities": [
     {{
       "priority": 1,
-      "title": "título corto",
-      "why_ai": "por qué la IA aporta aquí (1 frase)",
-      "what_to_do": "acción concreta (1-2 frases)",
+      "title": "título corto y específico",
+      "why_ai": "por qué la IA aporta aquí vs herramientas automáticas (1 frase)",
+      "what_to_do": "acción concreta: URL específica, parámetro, CVE o técnica (2-3 frases)",
       "estimated_impact": "high|medium|low",
       "model": "haiku|sonnet",
       "estimated_cost_usd": 0.01
     }}
   ],
-  "quick_wins": ["acción rápida 1", "acción rápida 2"],
-  "summary": "resumen ejecutivo en 2 frases"
+  "quick_wins": ["prueba concreta 1 con URL/payload", "prueba concreta 2"],
+  "cves_to_check": ["CVE-XXXX-YYYY — descripción breve"],
+  "summary": "resumen ejecutivo en 2 frases con el hallazgo más crítico primero"
 }}"""
 
     print("  Analizando oportunidades con Haiku...")
@@ -433,6 +591,17 @@ def print_summary(domain: str, data: dict):
         summary = data.get("summary", "")
         if summary:
             print(f"\n📋 {summary}\n")
+
+        tech_analysis = data.get("tech_stack_analysis", "")
+        if tech_analysis:
+            print(f"🖥️  Stack: {tech_analysis}\n")
+
+        cves = data.get("cves_to_check", [])
+        if cves:
+            print("🔎 CVEs a verificar:")
+            for cve in cves:
+                print(f"  ⚠️  {cve}")
+            print()
 
         opps = data.get("depth_opportunities", [])
         if opps:

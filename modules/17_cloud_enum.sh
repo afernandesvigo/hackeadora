@@ -170,77 +170,92 @@ module_run() {
     log_warn "cloud_enum no encontrado — usando verificación directa"
   fi
 
-  # ── Verificación directa con mutaciones ───────────────────
+  # ── Verificación directa con mutaciones (paralela) ────────
   log_info "Probando variaciones de nombre en S3/Azure/GCP..."
   local MUTATIONS
   MUTATIONS=$(_generate_mutations "$DOMAIN" "$ORG")
   local TOTAL_MUT
   TOTAL_MUT=$(echo "$MUTATIONS" | wc -l | tr -d ' ')
-  local CHECKED=0
-  local FOUND=0
+
+  # Azure antes solo se comprobaba 1/3 para ahorrar tiempo secuencial.
+  # En paralelo comprobamos todo — cobertura máxima sin coste extra.
+  local MUT_TMP="$OUT_DIR/.cloud_mut_results"
+  mkdir -p "$MUT_TMP"
+  local MAX_WORKERS="${CLOUD_PARALLEL:-20}"
+  local PIDS=()
 
   while IFS= read -r NAME; do
     [[ -z "$NAME" ]] && continue
-    ((CHECKED++))
-    (( CHECKED % 20 == 0 )) && log_info "[$CHECKED/$TOTAL_MUT] variaciones probadas..."
+    local SAFE
+    SAFE=$(echo "$NAME" | md5sum | cut -d' ' -f1)
+    (
+      local OUT_LINES=""
 
-    # S3
-    local S3_STATUS
-    S3_STATUS=$(_check_s3 "$NAME")
-    if [[ -n "$S3_STATUS" ]]; then
-      local S3_URL="https://${NAME}.s3.amazonaws.com"
-      local SEVERITY="info"
-      [[ "$S3_STATUS" == "open" ]] && SEVERITY="high"
+      local S3_STATUS
+      S3_STATUS=$(_check_s3 "$NAME")
+      [[ -n "$S3_STATUS" ]] && OUT_LINES+="S3|${S3_STATUS}|https://${NAME}.s3.amazonaws.com\n"
 
-      sqlite3 "$DB_PATH" \
-        "INSERT OR IGNORE INTO cloud_assets(domain_id,asset_url,provider,asset_type,status)
-         VALUES(${DOMAIN_ID},'${S3_URL}','aws','s3','${S3_STATUS}');" \
-        2>/dev/null || true
-
-      ((FOUND++))
-      log_warn "☁️  S3 [${S3_STATUS}]: $S3_URL"
-
-      if [[ "$S3_STATUS" == "open" ]]; then
-        _telegram_send "☁️ *S3 Bucket ABIERTO*
-🌐 \`${DOMAIN}\`
-🔗 \`${S3_URL}\`
-⚠️ Listado público — HIGH finding
-📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
-        db_add_finding "$DOMAIN_ID" "cloud_bucket" "high" "$S3_URL" "s3:open" "S3 bucket con listado público"
-      fi
-    fi
-
-    # Azure (solo para algunos nombres — es más lento)
-    if (( CHECKED % 3 == 0 )); then
       local AZ_STATUS
       AZ_STATUS=$(_check_azure "$NAME")
-      if [[ -n "$AZ_STATUS" ]]; then
-        local AZ_URL="https://${NAME}.blob.core.windows.net"
+      [[ -n "$AZ_STATUS" ]] && OUT_LINES+="AZURE|${AZ_STATUS}|https://${NAME}.blob.core.windows.net\n"
+
+      local GCP_STATUS
+      GCP_STATUS=$(_check_gcp "$NAME")
+      [[ -n "$GCP_STATUS" ]] && OUT_LINES+="GCP|${GCP_STATUS}|https://storage.googleapis.com/${NAME}\n"
+
+      printf "%b" "$OUT_LINES" > "$MUT_TMP/${SAFE}.txt"
+    ) &
+    PIDS+=($!)
+    if [[ ${#PIDS[@]} -ge $MAX_WORKERS ]]; then
+      wait "${PIDS[0]}" 2>/dev/null || true
+      PIDS=("${PIDS[@]:1}")
+    fi
+  done <<< "$MUTATIONS"
+  wait "${PIDS[@]}" 2>/dev/null || true
+
+  # ── Procesar resultados y guardar en DB ───────────────────
+  local FOUND=0
+  while IFS='|' read -r PROVIDER STATUS ASSET_URL; do
+    [[ -z "$PROVIDER" ]] && continue
+    ((FOUND++))
+
+    case "$PROVIDER" in
+      S3)
+        local SEVERITY="info"
+        [[ "$STATUS" == "open" ]] && SEVERITY="high"
         sqlite3 "$DB_PATH" \
           "INSERT OR IGNORE INTO cloud_assets(domain_id,asset_url,provider,asset_type,status)
-           VALUES(${DOMAIN_ID},'${AZ_URL}','azure','blob','${AZ_STATUS}');" \
+           VALUES(${DOMAIN_ID},'${ASSET_URL}','aws','s3','${STATUS}');" \
           2>/dev/null || true
-        ((FOUND++))
-        log_info "☁️  Azure Blob [${AZ_STATUS}]: $AZ_URL"
-      fi
-    fi
+        log_warn "☁️  S3 [${STATUS}]: $ASSET_URL"
+        if [[ "$STATUS" == "open" ]]; then
+          _telegram_send "☁️ *S3 Bucket ABIERTO*
+🌐 \`${DOMAIN}\`
+🔗 \`${ASSET_URL}\`
+⚠️ Listado público — HIGH finding
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+          db_add_finding "$DOMAIN_ID" "cloud_bucket" "high" "$ASSET_URL" "s3:open" "S3 bucket con listado público"
+        fi
+        ;;
+      AZURE)
+        sqlite3 "$DB_PATH" \
+          "INSERT OR IGNORE INTO cloud_assets(domain_id,asset_url,provider,asset_type,status)
+           VALUES(${DOMAIN_ID},'${ASSET_URL}','azure','blob','${STATUS}');" \
+          2>/dev/null || true
+        log_info "☁️  Azure Blob [${STATUS}]: $ASSET_URL"
+        ;;
+      GCP)
+        sqlite3 "$DB_PATH" \
+          "INSERT OR IGNORE INTO cloud_assets(domain_id,asset_url,provider,asset_type,status)
+           VALUES(${DOMAIN_ID},'${ASSET_URL}','gcp','gcs','${STATUS}');" \
+          2>/dev/null || true
+        [[ "$STATUS" == "open" ]] && \
+          log_warn "☁️  GCP Storage ABIERTO: $ASSET_URL" || \
+          log_info "☁️  GCP Storage [${STATUS}]: $ASSET_URL"
+        ;;
+    esac
+  done < <(cat "$MUT_TMP"/*.txt 2>/dev/null)
 
-    # GCP
-    local GCP_STATUS
-    GCP_STATUS=$(_check_gcp "$NAME")
-    if [[ -n "$GCP_STATUS" ]]; then
-      local GCP_URL="https://storage.googleapis.com/${NAME}"
-      sqlite3 "$DB_PATH" \
-        "INSERT OR IGNORE INTO cloud_assets(domain_id,asset_url,provider,asset_type,status)
-         VALUES(${DOMAIN_ID},'${GCP_URL}','gcp','gcs','${GCP_STATUS}');" \
-        2>/dev/null || true
-      ((FOUND++))
-      [[ "$GCP_STATUS" == "open" ]] && \
-        log_warn "☁️  GCP Storage ABIERTO: $GCP_URL" || \
-        log_info "☁️  GCP Storage [${GCP_STATUS}]: $GCP_URL"
-    fi
-
-  done <<< "$MUTATIONS"
-
-  log_ok "$MODULE_DESC completado: $FOUND cloud assets encontrados de $CHECKED variaciones"
+  rm -rf "$MUT_TMP"
+  log_ok "$MODULE_DESC completado: $FOUND cloud assets encontrados de $TOTAL_MUT variaciones"
 }
