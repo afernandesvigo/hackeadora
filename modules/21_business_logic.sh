@@ -27,6 +27,107 @@ declare -gA ENTITY_PATTERNS=(
   [report]="report,export,download,generate,pdf,csv,analytics,statistics,data"
 )
 
+# ── Detectar flujos de negocio reales en los endpoints ───────
+# Dado un JSON array de URLs, agrupa por prefijo y detecta secuencias
+# de acción (add→confirm→pay→complete) para que el AI Advisor entienda
+# qué procesos multipasos tiene la aplicación, no solo qué keywords matchean.
+_detect_entity_flows() {
+  local ENTITY_TYPE="$1"
+  local ENDPOINTS_JSON="$2"
+  local PARAMS_JSON="$3"
+
+  python3 - "$ENTITY_TYPE" "$ENDPOINTS_JSON" "$PARAMS_JSON" 2>/dev/null <<'PYEOF'
+import json, sys
+from urllib.parse import urlparse
+from collections import defaultdict
+
+entity_type = sys.argv[1]
+try:
+    urls    = json.loads(sys.argv[2])
+    params  = json.loads(sys.argv[3])
+except Exception:
+    print("[]"); sys.exit(0)
+
+if not urls:
+    print("[]"); sys.exit(0)
+
+# Palabras de acción ordenadas por fase del flujo (0=inicio … 3=fin)
+ACTION_PHASES = [
+    (0, ['add','create','new','start','init','register','begin','open']),
+    (1, ['review','confirm','verify','validate','check','preview','summary']),
+    (2, ['process','pay','submit','execute','send','apply','use','redeem']),
+    (3, ['complete','success','done','finish','callback','return','result']),
+]
+WORD_TO_PHASE = {w: ph for ph, words in ACTION_PHASES for w in words}
+
+flows = []
+
+# Flujo 1: agrupar por host + 2 primeros segmentos de path
+groups = defaultdict(list)
+for url in urls:
+    try:
+        p = urlparse(url)
+        parts = [x for x in p.path.split('/') if x]
+        prefix = p.netloc + "/" + "/".join(parts[:2])
+        groups[prefix].append(url)
+    except Exception:
+        continue
+
+for prefix, grp in groups.items():
+    if len(grp) < 2:
+        continue
+    steps = []
+    for u in sorted(set(grp)):
+        last = [x for x in urlparse(u).path.split('/') if x]
+        step = last[-1] if last else ""
+        if step and step not in steps:
+            steps.append(step)
+    if len(steps) >= 2:
+        flows.append({
+            "name": f"{entity_type}_flow",
+            "base_path": prefix,
+            "steps": steps[:8],
+            "endpoint_count": len(grp),
+            "params_seen": params[:8],
+        })
+
+# Flujo 2: secuencia de acciones entre URLs distintas del mismo host
+by_host = defaultdict(list)
+for url in urls:
+    try:
+        p = urlparse(url)
+        path_lower = p.path.lower()
+        phase = next((WORD_TO_PHASE[w] for w in WORD_TO_PHASE if w in path_lower), None)
+        if phase is not None:
+            action = next(w for w in WORD_TO_PHASE if w in path_lower)
+            by_host[p.netloc].append({"url": url, "phase": phase, "action": action})
+    except Exception:
+        continue
+
+for host, actions in by_host.items():
+    if len(actions) < 2:
+        continue
+    actions_sorted = sorted(actions, key=lambda x: (x["phase"], x["url"]))
+    flows.append({
+        "name": f"{entity_type}_action_sequence",
+        "host": host,
+        "steps": [a["action"] for a in actions_sorted[:6]],
+        "urls":  [a["url"]    for a in actions_sorted[:6]],
+        "params_seen": params[:8],
+    })
+
+# Deduplicar por steps
+seen, unique = set(), []
+for f in flows:
+    key = str(f.get("steps", []))
+    if key not in seen:
+        seen.add(key)
+        unique.append(f)
+
+print(json.dumps(unique[:4]))
+PYEOF
+}
+
 # ── Detectar entidades en URLs y params ───────────────────────
 _detect_entities() {
   local DOMAIN_ID="$1"
@@ -65,14 +166,14 @@ _detect_entities() {
     for PAT in "${PATS[@]}"; do
       # Buscar en URLs
       local MATCHED_URLS
-      MATCHED_URLS=$(echo "$ALL_URLS" | grep -i "$PAT" | head -5)
+      MATCHED_URLS=$(echo "$ALL_URLS" | grep -i "$PAT" | head -20)
       while IFS= read -r URL; do
         [[ -n "$URL" ]] && MATCHED_ENDPOINTS+=("$URL")
       done <<< "$MATCHED_URLS"
 
       # Buscar en params
       local MATCHED_P
-      MATCHED_P=$(echo "$ALL_PARAMS" | grep -i "$PAT" | head -5)
+      MATCHED_P=$(echo "$ALL_PARAMS" | grep -i "$PAT" | head -20)
       while IFS= read -r P; do
         [[ -n "$P" ]] && MATCHED_PARAMS+=("$P")
       done <<< "$MATCHED_P"
@@ -81,9 +182,9 @@ _detect_entities() {
     if [[ ${#MATCHED_ENDPOINTS[@]} -gt 0 ]] || [[ ${#MATCHED_PARAMS[@]} -gt 0 ]]; then
       # Deduplicar
       local UNIQ_ENDPOINTS
-      UNIQ_ENDPOINTS=$(printf '%s\n' "${MATCHED_ENDPOINTS[@]}" | sort -u | head -10)
+      UNIQ_ENDPOINTS=$(printf '%s\n' "${MATCHED_ENDPOINTS[@]}" | sort -u | head -20)
       local UNIQ_PARAMS
-      UNIQ_PARAMS=$(printf '%s\n' "${MATCHED_PARAMS[@]}" | sort -u | head -10)
+      UNIQ_PARAMS=$(printf '%s\n' "${MATCHED_PARAMS[@]}" | sort -u | head -20)
 
       local EP_JSON
       EP_JSON=$(echo "$UNIQ_ENDPOINTS" | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" 2>/dev/null || echo "[]")
@@ -93,6 +194,10 @@ _detect_entities() {
       # Inferir reglas de riesgo según tipo
       local RULES_JSON
       RULES_JSON=$(_infer_rules "$ENTITY_TYPE" "$UNIQ_PARAMS")
+
+      # Detectar flujos de negocio reales (secuencias de endpoints)
+      local FLOWS_JSON
+      FLOWS_JSON=$(_detect_entity_flows "$ENTITY_TYPE" "$EP_JSON" "$P_JSON")
 
       # Calcular risk score
       local RISK=0
@@ -108,10 +213,10 @@ _detect_entities() {
 
       sqlite3 "$DB_PATH" \
         "INSERT OR REPLACE INTO business_entities
-         (domain_id,entity_type,entity_name,endpoints,params,rules_inferred,risk_score)
+         (domain_id,entity_type,entity_name,endpoints,params,flows,rules_inferred,risk_score)
          VALUES(${DOMAIN_ID},'${ENTITY_TYPE}','${ENTITY_TYPE}',
                 '${EP_JSON//\'/\'\'}','${P_JSON//\'/\'\'}',
-                '${RULES_JSON//\'/\'\'}',${RISK});" 2>/dev/null || true
+                '${FLOWS_JSON//\'/\'\'}','${RULES_JSON//\'/\'\'}',${RISK});" 2>/dev/null || true
 
       ENTITIES_FOUND+=("$ENTITY_TYPE")
       log_info "  Entidad detectada: $ENTITY_TYPE (${#MATCHED_ENDPOINTS[@]} endpoints, ${#MATCHED_PARAMS[@]} params)"
@@ -458,6 +563,45 @@ module_run() {
     "SELECT COUNT(*) FROM business_entities WHERE domain_id=${DOMAIN_ID};" 2>/dev/null || echo 0)
   TOTAL_SUGGESTIONS=$(sqlite3 "$DB_PATH" \
     "SELECT COUNT(*) FROM ai_suggestions WHERE domain_id=${DOMAIN_ID};" 2>/dev/null || echo 0)
+
+  # Exportar resumen estructurado para AI Advisor
+  local BL_JSON="$OUT_DIR/business_logic.json"
+  python3 - "$DB_PATH" "$DOMAIN_ID" "$DOMAIN" > "$BL_JSON" 2>/dev/null <<'PYEOF'
+import sqlite3, json, sys
+
+db_path, dom_id, domain = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+entities = conn.execute(
+    """SELECT entity_type, risk_score, endpoints, params, flows, rules_inferred
+       FROM business_entities WHERE domain_id=? ORDER BY risk_score DESC""",
+    (dom_id,)
+).fetchall()
+
+def pj(v):
+    try: return json.loads(v or "[]")
+    except: return []
+
+output = {
+    "domain": domain,
+    "entity_count": len(entities),
+    "entities": [
+        {
+            "type":      r["entity_type"],
+            "risk":      r["risk_score"],
+            "endpoints": pj(r["endpoints"]),
+            "params":    pj(r["params"]),
+            "flows":     pj(r["flows"]),
+            "rules":     pj(r["rules_inferred"]),
+        }
+        for r in entities
+    ],
+}
+print(json.dumps(output, indent=2, ensure_ascii=False))
+conn.close()
+PYEOF
+  log_ok "Business logic exportado: $BL_JSON"
 
   if [[ "$TOTAL_ENTITIES" -gt 0 ]]; then
     _telegram_send "🏢 *Business Logic Analysis*

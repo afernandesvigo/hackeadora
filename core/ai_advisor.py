@@ -196,6 +196,13 @@ def get_login_forms(domain_id: int) -> list:
         except Exception:
             return []
 
+def _pj(val, default="[]"):
+    """Parse a JSON string from the DB, return list/dict on failure."""
+    try:
+        return json.loads(val or default)
+    except Exception:
+        return json.loads(default)
+
 def get_ai_suggestions(domain_id: int, status: str = "pending") -> list:
     with db_conn() as conn:
         try:
@@ -308,8 +315,14 @@ def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
     ], ensure_ascii=False)
 
     entities_summary = json.dumps([
-        {"type": e["entity_type"], "risk": e["risk_score"],
-         "rules": json.loads(e.get("rules_inferred", "[]"))[:3]}
+        {
+            "type":      e["entity_type"],
+            "risk":      e["risk_score"],
+            "endpoints": _pj(e.get("endpoints"))[:10],
+            "params":    _pj(e.get("params"))[:10],
+            "flows":     _pj(e.get("flows"))[:3],
+            "rules":     _pj(e.get("rules_inferred"))[:3],
+        }
         for e in entities[:10]
     ], ensure_ascii=False)
 
@@ -388,10 +401,16 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 ## Login forms / Auth endpoints detectados:
 {login_summary}
 
-## Entidades de negocio detectadas:
+## Lógica de negocio de la aplicación (entidades, flujos y parámetros reales):
 {entities_summary}
 
-Con este contexto, identifica las vulnerabilidades más probables en ESTE stack específico.
+Cada entidad incluye:
+- `endpoints`: URLs reales detectadas en el crawl que pertenecen a ese flujo
+- `params`: parámetros reales encontrados en esas URLs
+- `flows`: secuencias de acción detectadas (add→confirm→pay→complete)
+- `rules`: preguntas de seguridad inferidas por el módulo de recon
+
+Con este contexto, razona sobre la lógica de negocio de la aplicación y las vulnerabilidades más probables en ESTE stack específico.
 Si detectas software conocido (Looker, Grafana, Jenkins, etc.), menciona CVEs o técnicas
 de ataque conocidas para esa versión exacta.
 
@@ -468,9 +487,15 @@ Responde en español."""
     ], ensure_ascii=False, indent=2)
 
     entities_detail = json.dumps([
-        {"type": e["entity_type"], "name": e["entity_name"],
-         "risk_score": e["risk_score"],
-         "rules": json.loads(e.get("rules_inferred","[]"))}
+        {
+            "type":      e["entity_type"],
+            "name":      e["entity_name"],
+            "risk":      e["risk_score"],
+            "endpoints": _pj(e.get("endpoints"))[:10],
+            "params":    _pj(e.get("params"))[:10],
+            "flows":     _pj(e.get("flows"))[:3],
+            "rules":     _pj(e.get("rules_inferred")),
+        }
         for e in entities
     ], ensure_ascii=False, indent=2)
 
