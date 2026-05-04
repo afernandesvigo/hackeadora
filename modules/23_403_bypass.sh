@@ -110,6 +110,17 @@ _test_403_bypass() {
       ${PROXY_FLAG} "$VAR_URL" 2>/dev/null)
 
     if [[ "$STATUS" == "200" || "$STATUS" == "301" || "$STATUS" == "302" ]]; then
+      # Verificar que no es CF Access ni SPA catch-all
+      local VAR_RESP VAR_BODY
+      VAR_RESP=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+        -D - -o /tmp/.bypass_body_$$ ${PROXY_FLAG} "$VAR_URL" 2>/dev/null)
+      VAR_BODY=$(cat /tmp/.bypass_body_$$ 2>/dev/null | head -c 2000)
+      rm -f /tmp/.bypass_body_$$
+
+      is_cf_access_response "$VAR_RESP" && continue
+      is_spa_csr_body "$VAR_BODY" && continue
+      is_same_as_root "$BASE_HOST" "$VAR_BODY" "$PROXY_FLAG" && continue
+
       log_warn "  ⚡ 403 BYPASS (path): $VAR_URL → HTTP $STATUS"
       _report_bypass "$URL" "$VAR_URL" "path_variation" \
         "Path: $VAR_PATH → HTTP $STATUS" "$DOMAIN_ID" "$DOMAIN"
@@ -132,6 +143,12 @@ _test_403_bypass() {
       ${PROXY_FLAG} "$URL" 2>/dev/null)
 
     if [[ "$STATUS" == "200" ]]; then
+      local HDR_BODY
+      HDR_BODY=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+        -H "${HEADER}: ${VALUE}" ${PROXY_FLAG} "$URL" 2>/dev/null | head -c 2000)
+      is_spa_csr_body "$HDR_BODY" && continue
+      is_same_as_root "$BASE_HOST" "$HDR_BODY" "$PROXY_FLAG" && continue
+
       log_warn "  ⚡ 403 BYPASS (header): $HEADER: $VALUE → HTTP $STATUS"
       _report_bypass "$URL" "$URL" "header_bypass" \
         "Header: $HEADER: $VALUE → HTTP $STATUS" "$DOMAIN_ID" "$DOMAIN"

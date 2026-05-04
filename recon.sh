@@ -233,7 +233,7 @@ _run_pipeline() {
     run_module "15_param_discovery"
 
     # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
-    log_phase "Fase de testing en paralelo (módulos 20-31)..."
+    log_phase "Fase de testing en paralelo (módulos 20-35)..."
     ( run_module "20_smart_scan"    ) & _PID_20=$!
     ( run_module "21_business_logic") & _PID_21=$!
     ( run_module "22_cors_check"    ) & _PID_22=$!
@@ -241,14 +241,20 @@ _run_pipeline() {
     ( run_module "24_http_smuggling") & _PID_24=$!
     ( run_module "25_cms_scan"      ) & _PID_25=$!
     ( run_module "26_path_confusion") & _PID_26=$!
-    ( run_module "27_blind_xss"     ) & _PID_27=$!
-    ( run_module "28_cache_attacks" ) & _PID_28=$!
-    ( run_module "29_api_auth_scan" ) & _PID_29=$!
-    ( run_module "30_spring_config" ) & _PID_30=$!
-    ( run_module "31_keycloak_enum" ) & _PID_31=$!
+    ( run_module "27_blind_xss"              ) & _PID_27=$!
+    ( run_module "28_cache_attacks"          ) & _PID_28=$!
+    ( run_module "29_api_auth_scan"          ) & _PID_29=$!
+    ( run_module "30_spring_config"          ) & _PID_30=$!
+    ( run_module "31_keycloak_enum"          ) & _PID_31=$!
+    ( run_module "32_csp_analysis"           ) & _PID_32=$!
+    ( run_module "33_password_reset_poison"  ) & _PID_33=$!
+    ( run_module "34_race_condition"         ) & _PID_34=$!
+    ( run_module "35_oidc_oauth_scan"        ) & _PID_35=$!
+    ( run_module "36_spa_config_exposure"    ) & _PID_36=$!
     wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
          $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
-         $_PID_30 $_PID_31 2>/dev/null || true
+         $_PID_30 $_PID_31 $_PID_32 $_PID_33 $_PID_34 \
+         $_PID_35 $_PID_36 2>/dev/null || true
     log_ok "Testing paralelo completado"
 
     run_module "04_nuclei_scan"
@@ -281,7 +287,7 @@ _run_pipeline() {
     run_module "15_param_discovery"
 
     # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
-    log_phase "Fase de testing en paralelo (módulos 20-31)..."
+    log_phase "Fase de testing en paralelo (módulos 20-32)..."
     ( run_module "20_smart_scan"    ) & _PID_20=$!
     ( run_module "21_business_logic") & _PID_21=$!
     ( run_module "22_cors_check"    ) & _PID_22=$!
@@ -289,14 +295,17 @@ _run_pipeline() {
     ( run_module "24_http_smuggling") & _PID_24=$!
     ( run_module "25_cms_scan"      ) & _PID_25=$!
     ( run_module "26_path_confusion") & _PID_26=$!
-    ( run_module "27_blind_xss"     ) & _PID_27=$!
-    ( run_module "28_cache_attacks" ) & _PID_28=$!
-    ( run_module "29_api_auth_scan" ) & _PID_29=$!
-    ( run_module "30_spring_config" ) & _PID_30=$!
-    ( run_module "31_keycloak_enum" ) & _PID_31=$!
+    ( run_module "27_blind_xss"              ) & _PID_27=$!
+    ( run_module "28_cache_attacks"          ) & _PID_28=$!
+    ( run_module "29_api_auth_scan"          ) & _PID_29=$!
+    ( run_module "30_spring_config"          ) & _PID_30=$!
+    ( run_module "31_keycloak_enum"          ) & _PID_31=$!
+    ( run_module "32_csp_analysis"           ) & _PID_32=$!
+    ( run_module "33_password_reset_poison"  ) & _PID_33=$!
+    ( run_module "34_race_condition"         ) & _PID_34=$!
     wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
          $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
-         $_PID_30 $_PID_31 2>/dev/null || true
+         $_PID_30 $_PID_31 $_PID_32 $_PID_33 $_PID_34 2>/dev/null || true
     log_ok "Testing paralelo completado"
 
     # Nuclei al final — con todos los subdominios y URLs ya descubiertos

@@ -203,6 +203,78 @@ def _pj(val, default="[]"):
     except Exception:
         return json.loads(default)
 
+def get_port_findings(domain_id: int) -> list:
+    """Puertos abiertos y servicios — crítico para CVE matching."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT subdomain, ip, port, service_url, http_status,
+                          http_title, tech, banner
+                   FROM port_findings WHERE domain_id=?
+                   ORDER BY port LIMIT 40""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_github_findings(domain_id: int) -> list:
+    """Secrets y configs encontrados en repos públicos de GitHub."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT repo_url, finding_type, secret_type, raw_value,
+                          file_path, severity
+                   FROM github_findings WHERE domain_id=?
+                   AND severity IN ('critical','high')
+                   ORDER BY CASE severity WHEN 'critical' THEN 1 ELSE 2 END
+                   LIMIT 20""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_business_tests(domain_id: int) -> list:
+    """Resultados de tests de lógica de negocio — flows probados."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT test_type, endpoint, result, detail, severity
+                   FROM business_tests WHERE domain_id=?
+                   AND result IN ('vulnerable','suspicious')
+                   ORDER BY CASE severity
+                     WHEN 'critical' THEN 1 WHEN 'high' THEN 2 ELSE 3 END
+                   LIMIT 20""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+def get_false_positive_context() -> str:
+    """
+    Contexto de falsos positivos conocidos — aprendidos del scan de Sony/Crunchyroll.
+    Permite al AI descartar hallazgos que sabemos que no son explotables sin más contexto.
+    """
+    return """
+PATRONES DE FALSOS POSITIVOS CONOCIDOS (ignorar o bajar severidad):
+- CORS reflection en respuestas con header 'www-authenticate: Cloudflare-Access':
+  Cloudflare Access refleja el Origin en su propio 302 — no es la app.
+- 403 bypass que devuelve body idéntico a GET / del host:
+  SPA con client-side routing (React/Vue/Retool) devuelve 200 para todas las rutas.
+- WCD (Web Cache Deception) en apps con server=AmazonS3:
+  El origen es S3 estático — todas las rutas devuelven el mismo HTML shell.
+  Solo reportar si el body cacheado contiene datos de usuario reales (no el shell de React).
+- Hybris backoffice accessible en hosts que devuelven body con 'id="root"' o 'webpackJsonp':
+  SPAs que hacen catch-all de rutas, no un backoffice real.
+- Open redirect en 'Location' que apunta a *.cloudflareaccess.com?...&redirect_url=payload:
+  CF Access embebe la URL original como parámetro, no redirige al payload.
+- IBM Aspera CVE-2024-45409 sin SAMLResponse real del IdP:
+  El SP valida el cert del IdP — self-signed rechazado en <30ms. Sin cuenta en el tenant
+  Okta corporativo, el XSW no es ejecutable. Reportar solo como 'version disclosure + CVE applicable'.
+"""
+
 def get_ai_suggestions(domain_id: int, status: str = "pending") -> list:
     with db_conn() as conn:
         try:
@@ -241,8 +313,12 @@ def save_suggestion(domain_id: int, s_type: str, priority: int,
 
 # ── Claude API ────────────────────────────────────────────────
 def call_claude(prompt: str, model: str = DEFAULT_MODEL_CHEAP,
-                max_tokens: int = 1000, system: str = "") -> tuple[str, float]:
-    """Llama a la API de Claude. Devuelve (respuesta, coste_usd)."""
+                max_tokens: int = 1000, system: str = "",
+                thinking_budget: int = 0) -> tuple[str, float]:
+    """
+    Llama a la API de Claude. Devuelve (respuesta, coste_usd).
+    thinking_budget > 0 activa extended thinking (solo Sonnet 4.x).
+    """
     if not API_KEY:
         return "⚠️ ANTHROPIC_API_KEY no configurada", 0.0
 
@@ -260,20 +336,36 @@ def call_claude(prompt: str, model: str = DEFAULT_MODEL_CHEAP,
     if system:
         body["system"] = system
 
+    # Extended thinking — activa razonamiento profundo para chain analysis.
+    # Sonnet lo soporta nativamente; haiku no.
+    if thinking_budget > 0 and "sonnet" in model:
+        body["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": thinking_budget,
+        }
+        # Con thinking activo, temperature debe ser 1 (requerido por la API)
+        body["temperature"] = 1
+
     try:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json=body,
-            timeout=60
+            timeout=120
         )
         if r.status_code != 200:
             return f"Error API: {r.status_code} — {r.text[:200]}", 0.0
 
         data = r.json()
-        text = data["content"][0]["text"]
 
-        # Calcular coste
+        # Extraer solo los bloques de texto (ignorar thinking blocks)
+        text_parts = [
+            block["text"] for block in data.get("content", [])
+            if block.get("type") == "text"
+        ]
+        text = "\n".join(text_parts) if text_parts else ""
+
+        # Calcular coste — thinking tokens se cobran como output
         usage = data.get("usage", {})
         pricing = PRICING.get(model, {"in": 3.0, "out": 15.0})
         cost = (
@@ -288,7 +380,8 @@ def call_claude(prompt: str, model: str = DEFAULT_MODEL_CHEAP,
 
 # ── Funciones del advisor ─────────────────────────────────────
 
-def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
+def analyze_depth_opportunities(domain: str, domain_id: int,
+                                program_name: str = "") -> list:
     """
     Analiza con Haiku qué puntos del scan necesitan más profundidad con IA.
     Barato: ~$0.001-0.005 por dominio.
@@ -302,6 +395,10 @@ def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
     js_secrets     = get_js_secrets(domain_id)
     subdomains     = get_subdomain_info(domain_id)
     login_forms    = get_login_forms(domain_id)
+    port_findings  = get_port_findings(domain_id)
+    github_results = get_github_findings(domain_id)
+    biz_tests      = get_business_tests(domain_id)
+    fp_context     = get_false_positive_context()
 
     if not findings and not entities and not technologies and not subdomains:
         print(f"  Sin datos suficientes para analizar {domain}")
@@ -365,6 +462,31 @@ def analyze_depth_opportunities(domain: str, domain_id: int) -> list:
         for f in login_forms
     ], ensure_ascii=False)
 
+    ports_summary = json.dumps([
+        {"subdomain": p["subdomain"], "port": p["port"],
+         "service": p.get("service_url", ""), "status": p.get("http_status"),
+         "title": (p.get("http_title") or "")[:60],
+         "banner": (p.get("banner") or "")[:80]}
+        for p in port_findings
+    ], ensure_ascii=False)
+
+    github_summary = json.dumps([
+        {"repo": g["repo_url"][:80], "type": g.get("finding_type", ""),
+         "secret_type": g.get("secret_type", ""),
+         "severity": g.get("severity", ""),
+         "file": (g.get("file_path") or "")[:60]}
+        for g in github_results
+    ], ensure_ascii=False)
+
+    biz_tests_summary = json.dumps([
+        {"type": b["test_type"], "endpoint": (b["endpoint"] or "")[:80],
+         "result": b["result"], "severity": b.get("severity", "")}
+        for b in biz_tests
+    ], ensure_ascii=False)
+
+    program_ctx = f"Programa BBP: {program_name}" if program_name else \
+                  f"Programa BBP: inferir del dominio ({domain})"
+
     system = """Eres un experto en bug bounty y seguridad ofensiva con conocimiento profundo de CVEs,
 técnicas de explotación y plataformas SaaS/enterprise (Looker, Salesforce, ServiceNow, Grafana, etc.).
 Dado el stack tecnológico detectado y los findings de recon, propón ataques ESPECÍFICOS y ACCIONABLES:
@@ -379,6 +501,7 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
     ], ensure_ascii=False) if acx_findings else "[]"
 
     prompt = f"""Dominio: {domain}
+{program_ctx}
 
 ## Stack tecnológico detectado (con versiones):
 {tech_summary}
@@ -386,11 +509,17 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 ## Subdominios alive:
 {subs_summary}
 
+## Puertos y servicios expuestos (no-80/443):
+{ports_summary}
+
 ## Findings de Hackeadora (recon + nuclei + smart scan):
 {findings_summary}
 
 ## Findings de Acunetix (DAST):
 {acx_summary}
+
+## Tests de lógica de negocio ejecutados:
+{biz_tests_summary}
 
 ## Parámetros URL interesantes (potencial SSRF/SQLi/IDOR/redirect):
 {params_summary}
@@ -398,11 +527,17 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 ## Secrets encontrados en JS:
 {secrets_summary}
 
+## Secrets / configs en repositorios GitHub públicos:
+{github_summary}
+
 ## Login forms / Auth endpoints detectados:
 {login_summary}
 
 ## Lógica de negocio de la aplicación (entidades, flujos y parámetros reales):
 {entities_summary}
+
+## Contexto de falsos positivos — NO reportar estos patrones sin verificación adicional:
+{fp_context}
 
 Cada entidad incluye:
 - `endpoints`: URLs reales detectadas en el crawl que pertenecen a ese flujo
@@ -524,8 +659,9 @@ Por favor:
 
 Sé concreto y accionable. Si hay un chain crítico (account takeover, RCE, etc.), destácalo primero."""
 
-    print("  Analizando chains con Sonnet...")
-    response, cost = call_claude(prompt, DEFAULT_MODEL_SMART, 1500, system)
+    print("  Analizando chains con Sonnet (extended thinking)...")
+    response, cost = call_claude(prompt, DEFAULT_MODEL_SMART, 2000, system,
+                                 thinking_budget=8000)
     print(f"  Coste: ${cost:.4f}")
 
     # Guardar en DB

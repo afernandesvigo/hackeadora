@@ -65,6 +65,9 @@ _test_cors_url() {
 
     [[ -z "$ACAO" ]] && continue
 
+    # CF Access refleja el Origin en su propio 302 — no es la app.
+    is_cf_access_response "$RESPONSE" && continue
+
     # Determinar si es vulnerable
     local VULN=false
     local SEVERITY="low"
@@ -99,6 +102,36 @@ _test_cors_url() {
     fi
 
     if $VULN; then
+      # ── Confirmación de body: ¿se puede leer token/datos sensibles? ──
+      # Cuando CORS+credentials está activo, hacer GET real (no solo HEAD)
+      # y ver si la respuesta contiene tokens robables cross-origin.
+      local BODY_CONFIRM=""
+      if echo "$ACAC" | grep -qi "true" && [[ "$SEVERITY" == "high" ]]; then
+        local BODY_RESP
+        BODY_RESP=$(curl -sk --max-time 8 \
+          -H "Origin: ${ORIGIN}" \
+          ${PROXY_FLAG} "$URL" 2>/dev/null | head -c 2000)
+
+        # Detectar tokens en el body (CSRF, session, JWT)
+        local TOKEN_FOUND=""
+        echo "$BODY_RESP" | grep -qP '"csrf_token"\s*:' && \
+          TOKEN_FOUND="csrf_token readable (Drupal/CMS)"
+        echo "$BODY_RESP" | grep -qP '"X-CSRF-Token"\s*:' && \
+          TOKEN_FOUND="X-CSRF-Token readable"
+        echo "$BODY_RESP" | grep -qP '"token"\s*:\s*"[A-Za-z0-9_\-\.]{20,}"' && \
+          TOKEN_FOUND="API token readable"
+        echo "$BODY_RESP" | grep -qP '"access_token"\s*:' && \
+          TOKEN_FOUND="access_token readable"
+        echo "$BODY_RESP" | grep -qP 'eyJ[A-Za-z0-9_-]{20,}' && \
+          TOKEN_FOUND="JWT readable"
+
+        if [[ -n "$TOKEN_FOUND" ]]; then
+          SEVERITY="critical"
+          BODY_CONFIRM=" | BODY CONFIRM: ${TOKEN_FOUND}"
+          log_warn "    ⚠️  Token robable cross-origin: $TOKEN_FOUND"
+        fi
+      fi
+
       log_warn "  ⚡ CORS [$SEVERITY]: $URL"
       log_warn "    Origin: $ORIGIN"
       log_warn "    ACAO: $ACAO"
@@ -113,7 +146,7 @@ _test_cors_url() {
 
       if [[ "${BEFORE:-1}" == "0" ]]; then
         db_add_finding "$DOMAIN_ID" "cors" "$SEVERITY" \
-          "$URL" "cors_misconfig" "$DETAIL | Origin: $ORIGIN | $ACAO"
+          "$URL" "cors_misconfig" "$DETAIL${BODY_CONFIRM} | Origin: $ORIGIN | $ACAO"
 
         _telegram_send "🌐 *CORS Misconfiguration*
 🌐 \`${DOMAIN}\`
@@ -161,6 +194,25 @@ module_run() {
   # Subdominios alive raíz
   if [[ -s "$OUT_DIR/subs_alive.txt" ]]; then
     sed 's|^|https://|' "$OUT_DIR/subs_alive.txt" >> "$TARGETS"
+  fi
+
+  # Endpoints específicos con tokens en body (Drupal, WordPress, CMS)
+  # Estos son los más valiosos: CORS+credentials permite leer CSRF tokens
+  if [[ -s "$OUT_DIR/subs_alive.txt" ]]; then
+    while IFS= read -r SUB; do
+      [[ -z "$SUB" ]] && continue
+      for TOKEN_PATH in \
+        "/session/token" \
+        "/user/register?_format=json" \
+        "/user/login?_format=json" \
+        "/rest/session/token" \
+        "/wp-json/wp/v2/users/me" \
+        "/api/session" \
+        "/api/v1/me" \
+        "/api/user/me"; do
+        echo "https://${SUB}${TOKEN_PATH}"
+      done
+    done < "$OUT_DIR/subs_alive.txt" >> "$TARGETS"
   fi
 
   # Login forms y OAuth (críticos si CORS misconfigured)

@@ -16,12 +16,29 @@ _EMOJI_SCAN_START="🚀"
 _EMOJI_SCAN_END="✅"
 
 # ── Función base — split automático si supera 4096 chars ─────
+# TELEGRAM_MIN_SEVERITY (config.env): "high" solo notifica high/critical (default)
+#                                     "medium" también medium
+#                                     "all" todo
 _telegram_send() {
   local TEXT="$1"
 
   if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
-    log_warn "Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID vacíos)"
     return 0
+  fi
+
+  # Filtro de severidad — descartar medium/low/info si min es high (default)
+  local MIN_SEV="${TELEGRAM_MIN_SEVERITY:-high}"
+  if [[ "$MIN_SEV" == "high" ]]; then
+    # Descartar si el mensaje contiene indicadores de medium/low/info
+    # pero NO contiene indicadores de high/critical
+    if echo "$TEXT" | grep -qiE '🟠|medium|MEDIUM|\|medium\|' && \
+       ! echo "$TEXT" | grep -qiE '🔴|critical|CRITICAL|high|HIGH'; then
+      return 0
+    fi
+    if echo "$TEXT" | grep -qiE '🟡|low|LOW|⚪|info|INFO' && \
+       ! echo "$TEXT" | grep -qiE '🔴|critical|CRITICAL|high|HIGH'; then
+      return 0
+    fi
   fi
 
   local MAX=4000  # margen bajo el límite de 4096 de Telegram

@@ -306,6 +306,72 @@ http_should_skip() {
   return 1
 }
 
+# ── Detección de Cloudflare Access ───────────────────────────
+# Devuelve 0 (true) si la respuesta HTTP viene de CF Access, no de la app.
+# Uso: is_cf_access_response "$HEADERS" && return  # saltar, FP garantizado
+#
+# CF Access siempre añade www-authenticate: Cloudflare-Access y redirige
+# a *.cloudflareaccess.com. Cualquier CORS/bypass/redirect detectado en
+# estas respuestas es comportamiento del proxy, no de la aplicación.
+is_cf_access_response() {
+  local HEADERS="$1"
+  echo "$HEADERS" | grep -qi "www-authenticate:.*Cloudflare-Access" && return 0
+  echo "$HEADERS" | grep -qi "location:.*cloudflareaccess\.com" && return 0
+  return 1
+}
+
+# ── Detección de SPA CSR (React/Vue/Retool) ───────────────────
+# Devuelve 0 (true) si el body es un shell HTML de SPA con CSR puro.
+# Un SPA CSR siempre devuelve el mismo HTML vacío para todas las rutas —
+# no hay datos de usuario en la respuesta. Reportar WCD/bypass sobre
+# estos hosts es siempre un falso positivo.
+#
+# Marcadores detectados:
+#   - React: <div id="root"></div> + webpackJsonp
+#   - Retool: window.RETOOL_FRONTEND_FAKE_BACKEND_MODE
+#   - Vue CLI: <div id="app"></div>
+#   - Vite: /__vite_hmr o /vite/
+#   - Next.js SSG: __NEXT_DATA__ con props vacías (no SSR)
+is_spa_csr_body() {
+  local BODY="$1"
+  # React (CRA, Vite, custom webpack)
+  echo "$BODY" | grep -q 'id="root"' && \
+    echo "$BODY" | grep -qE 'webpackJsonp|__webpack_require__|vite' && return 0
+  # Retool
+  echo "$BODY" | grep -q 'RETOOL_FRONTEND_FAKE_BACKEND_MODE' && return 0
+  # Vue CLI
+  echo "$BODY" | grep -q 'id="app"' && \
+    echo "$BODY" | grep -qE 'chunk-vendors|app\.[a-f0-9]+\.js' && return 0
+  # Cuerpo idéntico al shell: sin contenido después del </script> + <div id=
+  local BODY_LEN=${#BODY}
+  [[ "$BODY_LEN" -lt 4096 ]] && \
+    echo "$BODY" | grep -q '<div id=' && \
+    ! echo "$BODY" | grep -qE 'email|@[a-z]+\.[a-z]+|Bearer |"token":|"session"' && return 0
+  return 1
+}
+
+# ── Comparar body con baseline de raíz ───────────────────────
+# Devuelve 0 si el body es idéntico (mismo len + primeros 200 bytes)
+# al contenido de la raíz del host — indica SPA catch-all.
+is_same_as_root() {
+  local HOST="$1"      # https://app.ejemplo.com
+  local BODY="$2"
+  local PROXY_FLAG="${3:-}"
+
+  local ROOT_BODY
+  ROOT_BODY=$(curl -sk -A "Mozilla/5.0" --max-time 8 ${PROXY_FLAG} \
+    "${HOST}/" 2>/dev/null | head -c 4096)
+
+  [[ -z "$ROOT_BODY" ]] && return 1
+
+  local BODY_PREFIX ROOT_PREFIX
+  BODY_PREFIX="${BODY:0:200}"
+  ROOT_PREFIX="${ROOT_BODY:0:200}"
+
+  [[ "$BODY_PREFIX" == "$ROOT_PREFIX" ]] && return 0
+  return 1
+}
+
 # ── Stats del analizador ──────────────────────────────────────
 http_analyzer_stats() {
   echo "HTTP Analyzer:"
