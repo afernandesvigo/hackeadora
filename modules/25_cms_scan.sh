@@ -1625,7 +1625,7 @@ _scan_hippo() {
         -o /tmp/.hippo_trav_$$ -w "%{http_code}" \
         "${BASE}/web/.content/${TRAV}" 2>/dev/null)
       TRAV_BODY=$(cat /tmp/.hippo_trav_$$ 2>/dev/null | head -c 1000)
-      if echo "$TRAV_BODY" | grep -qi "web-app\|servlet\|display-name\|WEB-INF"; then
+      if [[ "$TRAV_STATUS" == "200" ]] && echo "$TRAV_BODY" | grep -qi "<web-app\|<servlet-name\|<display-name\|<context-param"; then
         _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/web/.content/${TRAV}" \
           "Hippo CMS Path Traversal to WEB-INF" "critical" \
           "Path traversal desde /web/.content/ alcanza WEB-INF/web.xml — puede exponer configuración interna, credenciales y estructura de la app" "hippo_traversal"

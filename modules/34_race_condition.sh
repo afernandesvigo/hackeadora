@@ -138,6 +138,15 @@ _test_race_endpoint() {
   local COOKIE="${7:-}"
   local N_WORKERS="${RACE_WORKERS:-15}"
 
+  # Pre-check: si el endpoint redirige fuera del dominio, skip (FP por redirect a GitHub, etc.)
+  local URL_DOMAIN EFF_URL
+  URL_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+')
+  EFF_URL=$(curl -sI --max-time 5 -o /dev/null -w "%{url_effective}" "$URL" 2>/dev/null)
+  if [[ -n "$EFF_URL" ]] && ! echo "$EFF_URL" | grep -q "$URL_DOMAIN"; then
+    log_info "  Skipping race test — $URL redirige fuera del dominio ($EFF_URL)"
+    return 1
+  fi
+
   log_info "  ⚡ Race test ($LABEL): $URL [${N_WORKERS}x]"
 
   local RAW_JSON

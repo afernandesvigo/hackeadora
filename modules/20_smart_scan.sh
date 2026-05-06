@@ -373,8 +373,8 @@ _test_path_confusion() {
     LEN=$(echo "$BODY" | wc -c)
 
     # Positivo: 200 o diferente de 404 baseline en un path que debería no existir
-    # Excluir respuestas WAF conocidas: 418 (teapot), 429, 444, 406
-    if [[ "$STATUS" =~ ^(418|429|444|406)$ ]]; then continue; fi
+    # Excluir respuestas WAF conocidas y Bad Request (400 indica path rechazado, no confusión)
+    if [[ "$STATUS" =~ ^(400|418|429|444|406)$ ]]; then continue; fi
 
     if [[ "$STATUS" == "200" || ( "$STATUS" != "404" && "$STATUS" != "$BASELINE_404" && "$STATUS" != "000" ) ]]; then
       # Filtrar falsos positivos: SPA catch-all y respuestas idénticas al baseline
@@ -493,11 +493,22 @@ _test_idor() {
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
 
-  local ORIG_RESPONSE ORIG_LEN ORIG_STATUS
+  local URL_DOMAIN
+  URL_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+')
+
+  local ORIG_RESPONSE ORIG_LEN ORIG_STATUS ORIG_EFF
   ORIG_RESPONSE=$(curl -sL --max-time 10 ${CURL_PROXY} \
-    -w "\n###STATUS###%{http_code}" "$(_url_set_param "$URL" "$PARAM" "$ORIG_VAL")" 2>/dev/null)
+    -w "\n###STATUS###%{http_code}\n###EFF###%{url_effective}" \
+    "$(_url_set_param "$URL" "$PARAM" "$ORIG_VAL")" 2>/dev/null)
   ORIG_STATUS=$(echo "$ORIG_RESPONSE" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
+  ORIG_EFF=$(echo "$ORIG_RESPONSE" | grep -oP '(?<=###EFF###).*' | tail -1)
   ORIG_LEN=${#ORIG_RESPONSE}
+
+  # Si la URL base ya redirige fuera del dominio, el módulo no puede comparar respuestas
+  if [[ -n "$ORIG_EFF" ]] && ! echo "$ORIG_EFF" | grep -q "$URL_DOMAIN"; then
+    log_info "  Skipping IDOR — $URL redirige fuera del dominio ($ORIG_EFF)"
+    return 0
+  fi
 
   for TEST_VAL in "${TEST_VALS[@]}"; do
     [[ "$TEST_VAL" == "$ORIG_VAL" ]] && continue
@@ -505,11 +516,17 @@ _test_idor() {
     local TEST_URL
     TEST_URL=$(_url_set_param "$URL" "$PARAM" "$TEST_VAL")
 
-    local TEST_RESPONSE TEST_STATUS TEST_LEN
+    local TEST_RESPONSE TEST_STATUS TEST_LEN TEST_EFF
     TEST_RESPONSE=$(curl -sL --max-time 10 ${CURL_PROXY} \
-      -w "\n###STATUS###%{http_code}" "$TEST_URL" 2>/dev/null)
+      -w "\n###STATUS###%{http_code}\n###EFF###%{url_effective}" "$TEST_URL" 2>/dev/null)
     TEST_STATUS=$(echo "$TEST_RESPONSE" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
+    TEST_EFF=$(echo "$TEST_RESPONSE" | grep -oP '(?<=###EFF###).*' | tail -1)
     TEST_LEN=${#TEST_RESPONSE}
+
+    # Si este valor redirige fuera del dominio, el body es de otro sitio → FP
+    if [[ -n "$TEST_EFF" ]] && ! echo "$TEST_EFF" | grep -q "$URL_DOMAIN"; then
+      continue
+    fi
 
     if [[ "$TEST_STATUS" == "200" ]] && \
        [[ "$ORIG_STATUS" == "200" ]] && \

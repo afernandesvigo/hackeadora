@@ -419,13 +419,21 @@ _test_role_entity() {
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
 
-    local RESPONSE HTTP_STATUS BODY
+    local RESPONSE HTTP_STATUS BODY EFFECTIVE_URL
     RESPONSE=$(curl -sL --max-time 8 "$URL" \
-      -w "\n###STATUS###%{http_code}" 2>/dev/null)
+      -w "\n###STATUS###%{http_code}\n###EFF###%{url_effective}" 2>/dev/null)
     HTTP_STATUS=$(echo "$RESPONSE" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
-    BODY=$(echo "$RESPONSE" | sed '/###STATUS###/d')
+    EFFECTIVE_URL=$(echo "$RESPONSE" | grep -oP '(?<=###EFF###).*' | tail -1)
+    BODY=$(echo "$RESPONSE" | sed '/###STATUS###/d; /###EFF###/d')
 
     [[ "$HTTP_STATUS" != "200" ]] && continue
+
+    # Si el redirect salió del dominio target, es FP (e.g. duckling → github.com)
+    local TARGET_DOMAIN
+    TARGET_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+' | sed 's/^www\.//')
+    if [[ -n "$EFFECTIVE_URL" ]] && ! echo "$EFFECTIVE_URL" | grep -q "$TARGET_DOMAIN"; then
+      continue
+    fi
 
     # Si el body contiene un formulario de login o redirect JS, es FP
     # Cubre: HTML login form, cualquier window.location redirect, meta-refresh, texto auth típico

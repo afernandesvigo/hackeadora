@@ -160,7 +160,7 @@ invalid_html|crawl.?result|Analysis_Tranco|Tranco1M|domainlist|all-domain"; then
     done
 
     # Rate limiting — GitHub permite 30 búsquedas/min autenticado, 10 sin auth
-    sleep ${GITHUB_TOKEN:+2}${GITHUB_TOKEN:-7}
+    sleep "$([[ -n "$GITHUB_TOKEN" ]] && echo 2 || echo 7)"
 
   done
 

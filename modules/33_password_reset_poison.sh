@@ -158,16 +158,21 @@ _test_reset_endpoint() {
   if ! $VULN; then
     for HDR in "X-Host: ${CANARY}" "Forwarded: host=${CANARY}" \
                "X-Original-Host: ${CANARY}" "X-Real-Host: ${CANARY}"; do
-      local STATUS_C
-      STATUS_C=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 \
-        -o /dev/null -w "%{http_code}" \
+      local STATUS_C BODY_C
+      BODY_C=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 \
+        -o /tmp/.prp_c_$$ -w "%{http_code}" \
         -X POST -H "Content-Type: application/x-www-form-urlencoded" \
         -H "$HDR" \
         -d "email=probe%40${DOMAIN}" \
         ${PROXY_FLAG} "$URL" 2>/dev/null)
-      if [[ "$STATUS_C" == "200" || "$STATUS_C" == "302" ]]; then
+      STATUS_C="$BODY_C"
+      BODY_C=$(cat /tmp/.prp_c_$$ 2>/dev/null | head -c 2000)
+      rm -f /tmp/.prp_c_$$
+      # Requiere que el canary aparezca en el body; 200/302 solos son FP
+      if [[ "$STATUS_C" == "200" || "$STATUS_C" == "302" ]] && \
+         echo "$BODY_C" | grep -qi "$CANARY"; then
         VULN=true; VULN_HEADER="$HDR"
-        VULN_DETAIL="Header alternativo acepta host externo"
+        VULN_DETAIL="Header alternativo refleja canary en respuesta"
         break
       fi
     done

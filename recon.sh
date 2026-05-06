@@ -37,24 +37,27 @@ ONLY_MODULES=""
 SKIP_MODULES=""
 FORCE_BREACH=false
 SHOW_STATS=false
+SOCKS_PROXY_HOST=""
 
 for ARG in "$@"; do
   case "$ARG" in
-    --schedule)       SCHEDULE=true ;;
-    --force-breach)   FORCE_BREACH=true ;;
-    --modules=*)      ONLY_MODULES="${ARG#*=}" ;;
-    --skip-modules=*) SKIP_MODULES="${ARG#*=}" ;;
-    --target=*)       TARGET_SUB="${ARG#*=}" ;;
+    --schedule)         SCHEDULE=true ;;
+    --force-breach)     FORCE_BREACH=true ;;
+    --modules=*)        ONLY_MODULES="${ARG#*=}" ;;
+    --skip-modules=*)   SKIP_MODULES="${ARG#*=}" ;;
+    --target=*)         TARGET_SUB="${ARG#*=}" ;;
+    --socks-proxy)      SOCKS_PROXY_HOST="217.76.52.109" ;;
+    --socks-proxy=*)    SOCKS_PROXY_HOST="${ARG#*=}" ;;
     --test-telegram)
       source "$SCRIPT_DIR/core/logger.sh"
       source "$SCRIPT_DIR/core/notify.sh"
       notify_test; exit 0 ;;
-    --stats)          SHOW_STATS=true ;;
+    --stats)            SHOW_STATS=true ;;
     --help|-h)
       sed -n 's/^#  //p' "$0" | head -20
       exit 0 ;;
-    --*)              echo "[!] Opción desconocida: $ARG"; exit 1 ;;
-    *)                DOMAIN="$ARG" ;;
+    --*)                echo "[!] Opción desconocida: $ARG"; exit 1 ;;
+    *)                  DOMAIN="$ARG" ;;
   esac
 done
 
@@ -79,6 +82,11 @@ _setup_scan() {
   source "$SCRIPT_DIR/core/watchdog.sh"    2>/dev/null || true
   source "$SCRIPT_DIR/core/http_analyzer.sh" 2>/dev/null || true
   source "$SCRIPT_DIR/core/rotator.sh"    2>/dev/null || true
+
+  if [[ -n "${SOCKS_PROXY_HOST:-}" ]]; then
+    socks_tunnel_start "$SOCKS_PROXY_HOST"
+    trap 'socks_tunnel_stop' EXIT
+  fi
 
   db_init
   db_add_domain "$DOM"
@@ -233,7 +241,7 @@ _run_pipeline() {
     run_module "15_param_discovery"
 
     # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
-    log_phase "Fase de testing en paralelo (módulos 20-35)..."
+    log_phase "Fase de testing en paralelo (módulos 20-37)..."
     ( run_module "20_smart_scan"    ) & _PID_20=$!
     ( run_module "21_business_logic") & _PID_21=$!
     ( run_module "22_cors_check"    ) & _PID_22=$!
@@ -251,10 +259,11 @@ _run_pipeline() {
     ( run_module "34_race_condition"         ) & _PID_34=$!
     ( run_module "35_oidc_oauth_scan"        ) & _PID_35=$!
     ( run_module "36_spa_config_exposure"    ) & _PID_36=$!
+    ( run_module "37_aem_jcr_scan"           ) & _PID_37=$!
     wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
          $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
          $_PID_30 $_PID_31 $_PID_32 $_PID_33 $_PID_34 \
-         $_PID_35 $_PID_36 2>/dev/null || true
+         $_PID_35 $_PID_36 $_PID_37 2>/dev/null || true
     log_ok "Testing paralelo completado"
 
     run_module "04_nuclei_scan"
@@ -287,7 +296,7 @@ _run_pipeline() {
     run_module "15_param_discovery"
 
     # Testing modules are independent — run in parallel (WAL mode handles concurrent writes)
-    log_phase "Fase de testing en paralelo (módulos 20-32)..."
+    log_phase "Fase de testing en paralelo (módulos 20-37)..."
     ( run_module "20_smart_scan"    ) & _PID_20=$!
     ( run_module "21_business_logic") & _PID_21=$!
     ( run_module "22_cors_check"    ) & _PID_22=$!
@@ -303,9 +312,13 @@ _run_pipeline() {
     ( run_module "32_csp_analysis"           ) & _PID_32=$!
     ( run_module "33_password_reset_poison"  ) & _PID_33=$!
     ( run_module "34_race_condition"         ) & _PID_34=$!
+    ( run_module "35_oidc_oauth_scan"        ) & _PID_35=$!
+    ( run_module "36_spa_config_exposure"    ) & _PID_36=$!
+    ( run_module "37_aem_jcr_scan"           ) & _PID_37=$!
     wait $_PID_20 $_PID_21 $_PID_22 $_PID_23 $_PID_24 \
          $_PID_25 $_PID_26 $_PID_27 $_PID_28 $_PID_29 \
-         $_PID_30 $_PID_31 $_PID_32 $_PID_33 $_PID_34 2>/dev/null || true
+         $_PID_30 $_PID_31 $_PID_32 $_PID_33 $_PID_34 \
+         $_PID_35 $_PID_36 $_PID_37 2>/dev/null || true
     log_ok "Testing paralelo completado"
 
     # Nuclei al final — con todos los subdominios y URLs ya descubiertos

@@ -9,7 +9,7 @@
 # ── Inicialización ────────────────────────────────────────────
 db_init() {
   mkdir -p "$(dirname "$DB_PATH")"
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA busy_timeout=10000;
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS scan_history (
 );
 SQL
   # Migración: añadir columna blanket_403 a DBs existentes
-  sqlite3 "$DB_PATH" "ALTER TABLE subdomains ADD COLUMN blanket_403 INTEGER DEFAULT 0;" 2>/dev/null || true
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" "ALTER TABLE subdomains ADD COLUMN blanket_403 INTEGER DEFAULT 0;" 2>/dev/null || true
 
   log_ok "Base de datos inicializada: $DB_PATH"
   db_init_js
@@ -342,7 +342,7 @@ db_tech_stats() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_js() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Archivos JS descubiertos y analizados
@@ -405,7 +405,7 @@ SQL
 # ══════════════════════════════════════════════════════════════
 
 db_init_js_api_configs() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Configuración de API extraída de bundles JS (Angular, React, Vue...)
@@ -571,7 +571,7 @@ db_mark_js_endpoints_queued() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_queue() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Cola de confirmaciones pendientes vía Telegram
@@ -650,7 +650,7 @@ db_queue_pending() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_surface() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Parámetros descubiertos por URL
@@ -723,7 +723,7 @@ SQL
 # ══════════════════════════════════════════════════════════════
 
 db_init_vault() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS auth_credentials (
@@ -809,7 +809,7 @@ db_vault_list() {
 # ══════════════════════════════════════════════════════════════
 
 db_init_business() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Entidades de negocio inferidas del dominio
@@ -866,7 +866,7 @@ SQL
 # ══════════════════════════════════════════════════════════════
 
 db_init_acunetix() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Scans lanzados en Acunetix
@@ -916,7 +916,7 @@ SQL
 #  Blind XSS tables
 # ══════════════════════════════════════════════════════════════
 db_init_blindxss() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 -- Payloads inyectados con su identificador único
@@ -949,7 +949,7 @@ SQL
 #  PoC Evidence table — almacena request/response reales
 # ══════════════════════════════════════════════════════════════
 db_init_poc() {
-  sqlite3 "$DB_PATH" > /dev/null <<'SQL'
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" > /dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS poc_evidence (

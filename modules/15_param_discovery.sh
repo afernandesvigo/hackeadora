@@ -56,14 +56,15 @@ _param_fuzz() {
   local LFI_DETECT='root:[x*]?:[0-9]+:[0-9]+:|/bin/(bash|sh|nologin)|www-data:|daemon:|HTTP_USER_AGENT|DB_PASS|database_password|\[boot loader\]\s*\[operating systems\]|[a-zA-Z0-9+/]{40,}={0,2}'
 
   # ── SSTI: múltiples engines ──────────────────────────────────
-  # Cada entrada: "payload:::marker_en_respuesta"
+  # Números grandes y poco frecuentes → mínima probabilidad de colisión con
+  # contenido estático (fechas, IDs, etc.). El mismo criterio que smart_scan.
   local -a SSTI_PROBES=(
-    '{{7*7}}:::49'          # Jinja2, Twig, Pebble
-    '${7*7}:::49'           # Freemarker, Groovy, Spring EL
-    '<%= 7*7 %>:::49'       # ERB (Ruby), JSP EL
-    '{7*7}:::49'            # Smarty, Plates
-    '#{7*7}:::49'           # Thymeleaf (Spring)
-    '{{7*"7"}}:::7777777'   # Jinja2 string multiply
+    '{{9887*9887}}:::97753769'          # Jinja2, Twig, Pebble
+    '${9887*9887}:::97753769'           # Freemarker, Groovy, Spring EL
+    '<%= 9887*9887 %>:::97753769'       # ERB (Ruby), JSP EL
+    '{9887*9887}:::97753769'            # Smarty, Plates
+    '#{9887*9887}:::97753769'           # Thymeleaf (Spring)
+    '{{7*"7"}}:::7777777'              # Jinja2 string multiply
   )
 
   # ── Worker: testa una URL completa ──────────────────────────
@@ -184,7 +185,9 @@ read|pg|php_path|style|pdf|fn|filename|dir|directory|module|content|layout|conf|
           LOC=$(curl -sI --max-time 8 -A "${SCAN_UA:-Mozilla/5.0}" \
             "$(echo "$URL" | sed -E "s|([?&]${PNAME_CLEAN}=)[^&]*|\1%2F%2Fa.fernandes.es|")" \
             2>/dev/null | grep -i '^location:' | head -1)
-          if echo "$LOC" | grep -qi "a\.fernandes\.es"; then
+          local LOC_HOST
+          LOC_HOST=$(echo "$LOC" | grep -oP 'https?://\K[^/?#]+' | head -1)
+          if [[ "$LOC_HOST" == "a.fernandes.es" ]]; then
             echo "open_redirect|medium|${URL}|Open redirect param '${PNAME_CLEAN}' → ${LOC}" \
               >> "$FINDINGS_FILE"
           fi

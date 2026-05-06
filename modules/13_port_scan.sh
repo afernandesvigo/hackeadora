@@ -237,6 +237,8 @@ PYEOF
 
   # ── Procesar y guardar en DB ──────────────────────────────
   local NEW_SERVICES=0
+  local NEW_SERVICE_URLS="$OUT_DIR/.new_port_services.txt"
+  > "$NEW_SERVICE_URLS"
 
   while IFS= read -r LINE; do
     [[ -z "$LINE" ]] && continue
@@ -294,6 +296,9 @@ ${TECH:+🛠️ Tech: ${TECH}}
 
       db_add_finding "$DOMAIN_ID" "port_scan" "info" \
         "$SERVICE_URL" "port:${PORT_NUM}" "${TITLE:-sin título}"
+
+      # Acumular para análisis posterior
+      echo "$SERVICE_URL" >> "$NEW_SERVICE_URLS"
     fi
 
   done < "$HTTPX_OUT"
@@ -310,7 +315,34 @@ ${TECH:+🛠️ Tech: ${TECH}}
 🌐 \`${DOMAIN}\`
 🆕 Nuevos servicios web: ${NEW_SERVICES}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+
+    # ── Análisis automático de cada servicio encontrado ──────
+    # Módulos seleccionados: crawl, JS, params, smart scan,
+    # business logic, CORS, 403 bypass, CMS, path confusion, API auth
+    local ANALYSIS_MODULES="05,09,11,15,20,21,22,23,25,26,29"
+
+    log_info "Lanzando análisis sobre $NEW_SERVICES servicios en puertos alternativos..."
+
+    while IFS= read -r SVC_URL; do
+      [[ -z "$SVC_URL" ]] && continue
+
+      # hostname:port como target (httpx y curl lo manejan bien)
+      local SVC_TARGET
+      SVC_TARGET=$(echo "$SVC_URL" | sed 's|https\?://||;s|/.*||')
+
+      local SVC_LOG="$OUT_DIR/port_analysis_${SVC_TARGET//[:/]/_}.log"
+      log_info "  → Analizando $SVC_TARGET (log: $(basename "$SVC_LOG"))"
+
+      bash "$SCRIPT_DIR/recon.sh" "$DOMAIN" \
+        "--target=${SVC_TARGET}" \
+        "--modules=${ANALYSIS_MODULES}" \
+        >> "$SVC_LOG" 2>&1 &
+
+    done < "$NEW_SERVICE_URLS"
+
+    log_info "  Análisis en background — los findings llegarán por Telegram"
   fi
 
+  rm -f "$NEW_SERVICE_URLS"
   log_ok "$MODULE_DESC completado: $NEW_SERVICES nuevos servicios web en puertos alternativos"
 }

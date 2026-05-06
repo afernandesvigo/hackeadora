@@ -74,7 +74,7 @@ module_run() {
   # ── Paso 1: Resolución DNS con dnsx ───────────────────────
   if command -v "${DNSX_BIN:-dnsx}" &>/dev/null; then
     log_info "Resolviendo DNS con dnsx ($THREADS threads)..."
-    "${DNSX_BIN:-dnsx}" \
+    ${PROXYCHAINS_CMD:-} "${DNSX_BIN:-dnsx}" \
       -l "$RAW" \
       -silent \
       -o "$DNS_RESOLVED" \
@@ -89,7 +89,7 @@ module_run() {
   # ── Paso 2: Prueba HTTP con httpx ─────────────────────────
   if command -v "${HTTPX_BIN:-httpx}" &>/dev/null; then
     log_info "Probando HTTP con httpx..."
-    "${HTTPX_BIN:-httpx}" \
+    ${PROXYCHAINS_CMD:-} "${HTTPX_BIN:-httpx}" \
       -l "$DNS_RESOLVED" \
       -silent \
       -json \

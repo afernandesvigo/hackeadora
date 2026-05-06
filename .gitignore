@@ -18,3 +18,9 @@ blindxss/
 *.tmp
 *.log
 .DS_Store
+
+# Bases de datos locales
+*.db
+
+# Findings / reports (solo en servidor)
+hopgoblin_*.txt

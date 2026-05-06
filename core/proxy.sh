@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 #  core/proxy.sh — Configuración de proxy pasivo
-#  Soporta: Caido (puerto 8181) y Burp Suite (puerto 8080)
+#  Soporta: Caido (puerto 8181), Burp Suite (puerto 8080)
+#           y SOCKS5 vía SSH (--socks-proxy)
 #  Se incluye con: source core/proxy.sh
 # ============================================================
 
@@ -71,3 +72,75 @@ proxy_unexport_env() {
 
 # Inicializar al hacer source
 PROXY_ACTIVE=false
+
+# ── SOCKS5 vía SSH ────────────────────────────────────────────
+SOCKS_PORT="${SOCKS_PORT:-9050}"
+SOCKS_ACTIVE=false
+PROXYCHAINS_CMD=""
+
+_socks_write_conf() {
+  cat > /tmp/proxychains_hackeadora.conf << 'EOF'
+strict_chain
+proxy_dns
+remote_dns_subnet 224
+tcp_read_time_out 15000
+tcp_connect_time_out 8000
+quiet_mode
+
+[ProxyList]
+socks5 127.0.0.1 9050
+EOF
+}
+
+socks_tunnel_start() {
+  local HOST="$1"
+  local PORT="${SOCKS_PORT}"
+  local PASS="${SOCKS_PROXY_PASS:-}"
+
+  pkill -f "ssh -D ${PORT}" 2>/dev/null || true
+  sleep 0.5
+
+  _socks_write_conf
+
+  log_info "Levantando túnel SOCKS5 → root@${HOST}:${PORT}..."
+  if [[ -n "$PASS" ]]; then
+    sshpass -p "$PASS" ssh -D "${PORT}" -N \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=10 \
+        -o ServerAliveInterval=60 \
+        "root@${HOST}" & disown
+  else
+    ssh -D "${PORT}" -N \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=10 \
+        -o ServerAliveInterval=60 \
+        "root@${HOST}" & disown
+  fi
+  sleep 2
+
+  local SSH_PID
+  SSH_PID=$(pgrep -f "ssh -D ${PORT}" | head -1)
+  if [[ -n "$SSH_PID" ]] && kill -0 "$SSH_PID" 2>/dev/null; then
+    SOCKS_ACTIVE=true
+    export PROXYCHAINS_CMD="proxychains4 -f /tmp/proxychains_hackeadora.conf"
+    export http_proxy="socks5://127.0.0.1:${PORT}"
+    export https_proxy="socks5://127.0.0.1:${PORT}"
+    export HTTP_PROXY="socks5://127.0.0.1:${PORT}"
+    export HTTPS_PROXY="socks5://127.0.0.1:${PORT}"
+    # Telegram y localhost van directo, sin pasar por el proxy
+    export no_proxy="127.0.0.1,localhost,api.telegram.org"
+    export NO_PROXY="127.0.0.1,localhost,api.telegram.org"
+    log_ok "SOCKS5 activo — tráfico HTTP y DNS enrutado por ${HOST}"
+  else
+    log_warn "No se pudo establecer túnel SOCKS5 — continuando sin proxy"
+    SOCKS_ACTIVE=false
+  fi
+}
+
+socks_tunnel_stop() {
+  pkill -f "ssh -D ${SOCKS_PORT}" 2>/dev/null || true
+  SOCKS_ACTIVE=false
+  PROXYCHAINS_CMD=""
+  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY PROXYCHAINS_CMD
+  log_info "Túnel SOCKS5 detenido"
+}
