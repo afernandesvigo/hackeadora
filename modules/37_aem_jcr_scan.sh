@@ -47,32 +47,27 @@ MODULE_DESC="AEM JCR Deep Exposure Scanner (Sling selectors + DAM + CVE-2025-248
 _AEM_CURL_TO=12
 _AEM_CURL_MAX=18
 
-# ── HTTP helper con follow-redirect ──────────────────────────
+# ── HTTP helpers via wrappers core/http_analyzer.sh ──────────
+# Los wrappers _h_* respetan rate-limit global, dead-URL cache y
+# auto-inyección de proxy. Aquí mantenemos la firma original
+# (echo de body o status) para no tocar los ~40 callers.
 _aem_get() {
   local URL="$1"
-  curl -sL -k \
-    --connect-timeout $_AEM_CURL_TO \
-    --max-time $_AEM_CURL_MAX \
-    -H "User-Agent: Mozilla/5.0 (compatible; Hackeadora/1.0)" \
-    "$URL" 2>/dev/null
+  HTTP_TIMEOUT="$_AEM_CURL_MAX" \
+    _h_get "$URL" --connect-timeout "$_AEM_CURL_TO"
+  echo "$HTTP_LAST_BODY"
 }
 
 _aem_code() {
   local URL="$1"
-  curl -sL -k -o /dev/null -w "%{http_code}" \
-    --connect-timeout $_AEM_CURL_TO \
-    --max-time $_AEM_CURL_MAX \
-    -H "User-Agent: Mozilla/5.0 (compatible; Hackeadora/1.0)" \
-    "$URL" 2>/dev/null
+  HTTP_TIMEOUT="$_AEM_CURL_MAX" \
+    _h_status "$URL" --connect-timeout "$_AEM_CURL_TO"
 }
 
 _aem_code_noredirect() {
   local URL="$1"
-  curl -s -k -o /dev/null -w "%{http_code}" \
-    --connect-timeout $_AEM_CURL_TO \
-    --max-time $_AEM_CURL_MAX \
-    -H "User-Agent: Mozilla/5.0 (compatible; Hackeadora/1.0)" \
-    "$URL" 2>/dev/null
+  HTTP_TIMEOUT="$_AEM_CURL_MAX" \
+    _h_status_noredirect "$URL" --connect-timeout "$_AEM_CURL_TO"
 }
 
 # ── Detectar si un host tiene AEM ────────────────────────────
@@ -101,9 +96,8 @@ _aem_fingerprint() {
   done
 
   # 3. X-Content-Type-Options / Server header con Adobe/AEM
-  local HDRS
-  HDRS=$(curl -sLI -k --connect-timeout 8 --max-time 12 "$BASE/" 2>/dev/null)
-  if echo "$HDRS" | grep -qi "adobe\|aem\|cq5\|day-servlet\|sling"; then
+  _h_head "$BASE/"
+  if echo "$HTTP_LAST_HEADERS" | grep -qi "adobe\|aem\|cq5\|day-servlet\|sling"; then
     return 0
   fi
 
@@ -540,13 +534,12 @@ _aem_check_write() {
 
   for P in "${TEST_PATHS[@]}"; do
     for METHOD in PUT POST; do
-      local CODE
-      CODE=$(curl -s -k -o /dev/null -w "%{http_code}" \
-        -X "$METHOD" \
-        --connect-timeout 8 --max-time 12 \
+      # _noredirect: Bug #9 — evitar que un 30x se siga y devuelva 200 falso
+      _h_method_noredirect "$METHOD" "${BASE}${P}" \
+        --connect-timeout 8 \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "jcr:primaryType=nt:unstructured&jcr:title=test" \
-        "${BASE}${P}" 2>/dev/null)
+        --data "jcr:primaryType=nt:unstructured&jcr:title=test"
+      local CODE="$HTTP_LAST_STATUS"
 
       # 200/201 = escritura exitosa (crítico), 409 = conflicto (podría indicar escritura parcial)
       if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
@@ -554,8 +547,7 @@ _aem_check_write() {
           "aem_jcr_write" "critical" \
           "JCR write via ${METHOD} exitoso (HTTP ${CODE}): escritura sin autenticación en ${P}"
         # Intentar limpiar
-        curl -s -k -o /dev/null -X DELETE "${BASE}${P}" \
-          --connect-timeout 8 --max-time 12 2>/dev/null || true
+        _h_method_noredirect "DELETE" "${BASE}${P}" --connect-timeout 8 2>/dev/null || true
         break 2
       fi
     done
@@ -575,15 +567,14 @@ _aem_check_cve_2025_24813() {
   local PUT_URL="${BASE}/${TAG}/session"
 
   # PUT con Content-Range → 409 indica partial PUT aceptado
-  local PUT_CODE
-  PUT_CODE=$(curl -s -k -o /dev/null -w "%{http_code}" \
-    -X PUT \
-    --connect-timeout 8 --max-time 15 \
+  # _noredirect: Bug #9 — un 30x con -L falsifica 200/204
+  _h_method_noredirect "PUT" "$PUT_URL" \
+    --connect-timeout 8 \
     -H "Content-Length: 100" \
     -H "Content-Range: bytes 0-50/200" \
     -H "Content-Type: application/octet-stream" \
-    --data-binary "HACKEADORA_PROBE_$(date +%s)" \
-    "$PUT_URL" 2>/dev/null)
+    --data-binary "HACKEADORA_PROBE_$(date +%s)"
+  local PUT_CODE="$HTTP_LAST_STATUS"
 
   if [[ "$PUT_CODE" == "409" ]]; then
     _aem_finding "$DOMAIN_ID" "$DOMAIN" "$PUT_URL" \
@@ -594,8 +585,7 @@ _aem_check_cve_2025_24813() {
       "cve_2025_24813_write_enabled" "critical" \
       "CVE-2025-24813: Tomcat DefaultServlet write ENABLED (HTTP ${PUT_CODE}) — PUT sin autenticación aceptado en ${PUT_URL}"
     # Intentar limpiar
-    curl -s -k -o /dev/null -X DELETE "$PUT_URL" \
-      --connect-timeout 8 --max-time 12 2>/dev/null || true
+    _h_method_noredirect "DELETE" "$PUT_URL" --connect-timeout 8 2>/dev/null || true
   fi
   # 403/405 = DefaultServlet readonly=true (not vulnerable) → no reporting
 }
@@ -645,6 +635,8 @@ module_run() {
   local OUT_DIR="$3"
 
   log_phase "Módulo 37 — $MODULE_DESC: $DOMAIN"
+
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
 
   # Construir lista de candidatos
   local CANDIDATES=()

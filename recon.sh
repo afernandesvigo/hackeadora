@@ -91,6 +91,15 @@ _setup_scan() {
   db_init
   db_add_domain "$DOM"
   DOMAIN_ID=$(db_get_domain_id "$DOM")
+
+  if [[ -n "${PRESEED_SUBS_RAW:-}" ]] && [[ -s "$PRESEED_SUBS_RAW" ]]; then
+    cp "$PRESEED_SUBS_RAW" "$OUT_DIR/subs_raw.txt"
+    log_info "Pre-seeded subs_raw.txt desde $PRESEED_SUBS_RAW ($(wc -l < "$OUT_DIR/subs_raw.txt") subs)"
+  fi
+  if [[ -n "${PRESEED_SUBS_ALIVE:-}" ]] && [[ -s "$PRESEED_SUBS_ALIVE" ]]; then
+    cp "$PRESEED_SUBS_ALIVE" "$OUT_DIR/subs_alive.txt"
+    log_info "Pre-seeded subs_alive.txt desde $PRESEED_SUBS_ALIVE ($(wc -l < "$OUT_DIR/subs_alive.txt") subs)"
+  fi
 }
 
 # ── Ejecutar un módulo ────────────────────────────────────────
@@ -269,6 +278,9 @@ _run_pipeline() {
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
 
+    # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
+    run_module "99_verify_findings"
+
   else
     # ── MODO COMPLETO ───────────────────────────────────────
     log_phase "Hackeadora — Scan completo: $DOM"
@@ -324,6 +336,9 @@ _run_pipeline() {
     # Nuclei al final — con todos los subdominios y URLs ya descubiertos
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
+
+    # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
+    run_module "99_verify_findings"
   fi
 
   # ── AI Advisor al final (siempre, si está configurado) ─────

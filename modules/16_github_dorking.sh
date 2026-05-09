@@ -121,6 +121,37 @@ invalid_html|crawl.?result|Analysis_Tranco|Tranco1M|domainlist|all-domain"; then
         continue
       fi
 
+      # Bug #7: co-ocurrencia obligatoria — el archivo debe contener algo más
+      # específico al target que solo el substring del dominio. Sin esto, dorks
+      # como "repsol" matchean repos random sin relación.
+      local FILE_CONTENT
+      FILE_CONTENT=$(echo "$ITEM" | jq -r '.text_matches[]?.fragment // ""' 2>/dev/null | head -c 4000)
+      [[ -z "$FILE_CONTENT" ]] && FILE_CONTENT=$(echo "$ITEM" | jq -r '.snippet // ""' 2>/dev/null)
+
+      # Co-ocurrencia: email del target, hostname interno, o token con prefijo target
+      local IS_RELEVANT=false
+      # Email con dominio target
+      echo "$FILE_CONTENT" | grep -qiE "@[a-zA-Z0-9.-]*${DOMAIN//./\\.}" && IS_RELEVANT=true
+      # URL/path con hostname *.target.tld
+      echo "$FILE_CONTENT" | grep -qiE "https?://[a-zA-Z0-9.-]+\.${DOMAIN//./\\.}/" && IS_RELEVANT=true
+      # Subdomain conocido del target en DB
+      if ! $IS_RELEVANT; then
+        local TARGET_SUBS
+        TARGET_SUBS=$(sqlite3 "$DB_PATH" \
+          "SELECT subdomain FROM subdomains WHERE domain_id=${DOMAIN_ID} LIMIT 50;" 2>/dev/null)
+        while IFS= read -r SUB; do
+          [[ -z "$SUB" ]] && continue
+          echo "$FILE_CONTENT" | grep -qF "$SUB" && IS_RELEVANT=true && break
+        done <<< "$TARGET_SUBS"
+      fi
+
+      # Si el contenido no tiene co-ocurrencia → downgrade a info, no insertar como high
+      local SEVERITY="high"
+      if ! $IS_RELEVANT; then
+        SEVERITY="info"
+        log_info "  GitHub: $REPO_URL/$FILE_PATH — sin co-ocurrencia con $DOMAIN, severity=info"
+      fi
+
       # Determinar tipo de finding
       local FTYPE="secret"
       echo "$DORK" | grep -qi "password\|secret\|key\|token\|credential\|private" && FTYPE="secret"
@@ -140,21 +171,24 @@ invalid_html|crawl.?result|Analysis_Tranco|Tranco1M|domainlist|all-domain"; then
         "INSERT OR IGNORE INTO github_findings
          (domain_id,repo_url,file_path,finding_type,content,severity)
          VALUES(${DOMAIN_ID},'${REPO_URL//\'/\'\'}','${FILE_PATH//\'/\'\'}',
-                '${FTYPE}','${CONTEXT//\'/\'\'}','high');" \
+                '${FTYPE}','${CONTEXT//\'/\'\'}','${SEVERITY}');" \
         2>/dev/null || true
 
       if [[ "${BEFORE:-1}" == "0" ]]; then
         ((NEW_FINDINGS++))
-        log_warn "  📁 ${FTYPE}: $REPO_URL → $FILE_PATH"
-        _telegram_send "🐙 *GitHub Finding — ${FTYPE}*
+        log_warn "  📁 ${FTYPE} [$SEVERITY]: $REPO_URL → $FILE_PATH"
+        # Solo notificar Telegram si tiene co-ocurrencia (high)
+        if [[ "$SEVERITY" == "high" ]]; then
+          _telegram_send "🐙 *GitHub Finding — ${FTYPE}*
 🌐 \`${DOMAIN}\`
 🔍 Dork: \`${DORK:0:80}\`
 📁 Repo: ${REPO_URL}
 📄 Archivo: \`${FILE_PATH}\`
 🔗 ${HTML_URL}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+        fi
 
-        db_add_finding "$DOMAIN_ID" "github" "high" \
+        db_add_finding "$DOMAIN_ID" "github" "$SEVERITY" \
           "$REPO_URL" "github_dork" "${FTYPE}: ${FILE_PATH}"
       fi
     done

@@ -90,9 +90,8 @@ _test_403_bypass() {
 
   # Obtener status original
   local ORIG_STATUS
-  ORIG_STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-    -o /dev/null -w "%{http_code}" \
-    ${PROXY_FLAG} "$URL" 2>/dev/null)
+  _h_get "$URL"
+  ORIG_STATUS="$HTTP_LAST_STATUS"
 
   # Solo interesa si es 403 o 401
   [[ "$ORIG_STATUS" != "403" && "$ORIG_STATUS" != "401" ]] && return 1
@@ -104,22 +103,12 @@ _test_403_bypass() {
   while IFS= read -r VAR_PATH; do
     [[ -z "$VAR_PATH" || "$VAR_PATH" == "$PATH_" ]] && continue
     local VAR_URL="${BASE_HOST}${VAR_PATH}"
-    local STATUS
-    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-      -o /dev/null -w "%{http_code}" \
-      ${PROXY_FLAG} "$VAR_URL" 2>/dev/null)
+    _h_get "$VAR_URL"
+    local STATUS="$HTTP_LAST_STATUS"
 
     if [[ "$STATUS" == "200" || "$STATUS" == "301" || "$STATUS" == "302" ]]; then
-      # Verificar que no es CF Access ni SPA catch-all
-      local VAR_RESP VAR_BODY
-      VAR_RESP=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-        -D - -o /tmp/.bypass_body_$$ ${PROXY_FLAG} "$VAR_URL" 2>/dev/null)
-      VAR_BODY=$(cat /tmp/.bypass_body_$$ 2>/dev/null | head -c 2000)
-      rm -f /tmp/.bypass_body_$$
-
-      is_cf_access_response "$VAR_RESP" && continue
-      is_spa_csr_body "$VAR_BODY" && continue
-      is_same_as_root "$BASE_HOST" "$VAR_BODY" "$PROXY_FLAG" && continue
+      # Verificar que no es CF Access, SPA catch-all, ni same-as-root
+      is_likely_fp_response "$BASE_HOST" && continue
 
       log_warn "  ⚡ 403 BYPASS (path): $VAR_URL → HTTP $STATUS"
       _report_bypass "$URL" "$VAR_URL" "path_variation" \
@@ -136,18 +125,11 @@ _test_403_bypass() {
     local VALUE="${BYPASS_HEADERS[$HEADER]}"
     [[ "$VALUE" == "PATH" ]] && VALUE="$PATH_"
 
-    local STATUS
-    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-      -o /dev/null -w "%{http_code}" \
-      -H "${HEADER}: ${VALUE}" \
-      ${PROXY_FLAG} "$URL" 2>/dev/null)
+    _h_get "$URL" -H "${HEADER}: ${VALUE}"
+    local STATUS="$HTTP_LAST_STATUS"
 
     if [[ "$STATUS" == "200" ]]; then
-      local HDR_BODY
-      HDR_BODY=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-        -H "${HEADER}: ${VALUE}" ${PROXY_FLAG} "$URL" 2>/dev/null | head -c 2000)
-      is_spa_csr_body "$HDR_BODY" && continue
-      is_same_as_root "$BASE_HOST" "$HDR_BODY" "$PROXY_FLAG" && continue
+      is_likely_fp_response "$BASE_HOST" && continue
 
       log_warn "  ⚡ 403 BYPASS (header): $HEADER: $VALUE → HTTP $STATUS"
       _report_bypass "$URL" "$URL" "header_bypass" \
@@ -163,11 +145,8 @@ _test_403_bypass() {
   # TRACE excluido: devuelve 200 en cualquier path cuando está habilitado
   # (no es un bypass real — se detecta como XST en módulo 25/nuclei)
   for METHOD in POST PUT PATCH HEAD DELETE OPTIONS; do
-    local STATUS BODY_LEN
-    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-      -o /dev/null -w "%{http_code}" \
-      -X "$METHOD" \
-      ${PROXY_FLAG} "$URL" 2>/dev/null)
+    _h_method "$METHOD" "$URL"
+    local STATUS="$HTTP_LAST_STATUS"
 
     if [[ "$STATUS" == "200" || "$STATUS" == "201" ]]; then
       log_warn "  ⚡ 403 BYPASS (method): $METHOD $URL → HTTP $STATUS"
@@ -226,9 +205,8 @@ module_run() {
   if [[ -s "$ALIVE_FILE" ]]; then
     local _FIRST_SUB
     _FIRST_SUB=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
-    local _CF_BODY
-    _CF_BODY=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-      "https://${_FIRST_SUB}/" 2>/dev/null | head -c 1000)
+    _h_get "https://${_FIRST_SUB}/"
+    local _CF_BODY="${HTTP_LAST_BODY:0:1000}"
     if echo "$_CF_BODY" | grep -qi "Just a moment\|cf-browser-verification\|cf_chl\|Checking your browser"; then
       log_info "Cloudflare Bot Management detectado — limitando bypass a técnicas anti-CF"
       CF_BOT_PROTECTION=true
@@ -239,10 +217,8 @@ module_run() {
   if [[ -s "$ALIVE_FILE" ]]; then
     local _TRACE_SUB
     _TRACE_SUB=$(head -1 "$ALIVE_FILE" | tr -d '[:space:]')
-    local _TRACE_STATUS
-    _TRACE_STATUS=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
-      -o /dev/null -w "%{http_code}" -X TRACE \
-      ${CURL_PROXY} "https://${_TRACE_SUB}/" 2>/dev/null)
+    _h_method "TRACE" "https://${_TRACE_SUB}/"
+    local _TRACE_STATUS="$HTTP_LAST_STATUS"
     if [[ "$_TRACE_STATUS" == "200" ]]; then
       log_warn "  ⚡ TRACE habilitado (XST): https://${_TRACE_SUB}/ → HTTP 200 — Cross-Site Tracing permite robo de headers HTTP-only"
       db_add_finding "$DOMAIN_ID" "xst" "medium" \
@@ -290,9 +266,7 @@ module_run() {
         for APATH in "${ADMIN_PATHS[@]}"; do
           local TEST_URL="https://${SUB}${APATH}"
           local STATUS
-          STATUS=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 \
-            -o /dev/null -w "%{http_code}" \
-            ${CURL_PROXY} "$TEST_URL" 2>/dev/null)
+          STATUS=$(_h_status "$TEST_URL")
           if [[ "$STATUS" == "403" || "$STATUS" == "401" || "$STATUS" == "429" ]]; then
             echo "$TEST_URL|$STATUS" >> "$SWEEP_TMP/${SUB//\//_}.txt"
           fi

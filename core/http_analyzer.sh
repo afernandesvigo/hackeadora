@@ -372,6 +372,220 @@ is_same_as_root() {
   return 1
 }
 
+# ============================================================
+#  Helpers ergonómicos (Tier 1.1) — drop-in para módulos
+#  ──────────────────────────────────────────────────────────
+#  Toda llamada respeta:
+#    - HTTP_DEAD_URLS  → 404 ya confirmado, skip inmediato
+#    - HTTP_RATE_LIMIT_UNTIL → pausa global hasta ese timestamp
+#    - SCAN_UA         → User-Agent del scan (configurable)
+#    - PROXY_ACTIVE / PROXY_URL → proxy auto-inyectado si activo
+#
+#  Contrato: las funciones NO escriben en stdout. Tras llamarlas,
+#  el caller lee:
+#    - HTTP_LAST_STATUS   → código HTTP (e.g. "200", "404", "000" si error)
+#    - HTTP_LAST_HEADERS  → headers raw (incluyendo CRLF)
+#    - HTTP_LAST_BODY     → body completo
+#  Esto evita el problema de command-substitution con globales:
+#  hacer `BODY=$(_h_get URL)` ejecuta el helper en una subshell y pierde
+#  HTTP_LAST_STATUS — usar globales lo evita.
+#
+#  Return code:
+#    - 0 si la request se completó (cualquier código HTTP, incluso 4xx/5xx
+#      o "dead" cacheado) — pensado para no romper `set -e` en módulos.
+#      Caller debe inspeccionar HTTP_LAST_STATUS para decidir.
+#    - 1 SOLO si hubo error de red completo (status="000") o curl no pudo
+#      ejecutarse.
+# ============================================================
+
+HTTP_LAST_HEADERS=""
+HTTP_LAST_BODY=""
+
+# ── _h_request METHOD URL DATA [extra_curl_args...] (interno) ─
+_h_request() {
+  local METHOD="$1"; local URL="$2"; local DATA="$3"; shift 3
+
+  HTTP_LAST_STATUS=""
+  HTTP_LAST_HEADERS=""
+  HTTP_LAST_BODY=""
+
+  # Skip dead URLs (404 confirmado anteriormente) — devolver como resultado, no error
+  if [[ -n "${HTTP_DEAD_URLS[$URL]:-}" ]]; then
+    HTTP_LAST_STATUS="404"
+    HTTP_LAST_RESULT="dead"
+    return 0
+  fi
+
+  # Honrar rate-limit global
+  local NOW
+  NOW=$(date +%s)
+  if [[ "$NOW" -lt "${HTTP_RATE_LIMIT_UNTIL:-0}" ]]; then
+    local WAIT=$(( HTTP_RATE_LIMIT_UNTIL - NOW ))
+    type log_info &>/dev/null && log_info "Esperando rate-limit global: ${WAIT}s..."
+    sleep "$WAIT"
+  fi
+
+  local UA="${SCAN_UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36}"
+  local TIMEOUT="${HTTP_TIMEOUT:-12}"
+
+  # Proxy automático desde globales (proxy_check los setea)
+  local PROXY_ARGS=()
+  if [[ "${PROXY_ACTIVE:-false}" == "true" ]] && [[ -n "${PROXY_URL:-}" ]]; then
+    PROXY_ARGS=(--proxy "$PROXY_URL")
+  fi
+
+  local BODY_FILE HDR_FILE
+  BODY_FILE=$(mktemp /tmp/h_body_XXXXXX)
+  HDR_FILE=$(mktemp /tmp/h_hdr_XXXXXX)
+
+  # Curl args base
+  # HTTP_NO_REDIRECT=1 deshabilita -L (módulos que sondean exposiciones
+  # explícitas como AEM JCR write, actuator, hippo login deben usarlo
+  # para no falsificar 200 cuando el host responde 30x).
+  local CURL_ARGS=(-sk
+                   --max-time "$TIMEOUT"
+                   --max-filesize 2000000
+                   -A "$UA"
+                   -D "$HDR_FILE"
+                   -o "$BODY_FILE"
+                   -w "%{http_code}")
+  if [[ "${HTTP_NO_REDIRECT:-0}" != "1" ]]; then
+    CURL_ARGS+=(-L)
+  fi
+
+  case "$METHOD" in
+    HEAD) CURL_ARGS+=(-I) ;;
+    GET)  ;;  # default
+    *)    CURL_ARGS+=(-X "$METHOD") ;;
+  esac
+
+  if [[ -n "$DATA" ]]; then
+    CURL_ARGS+=(--data "$DATA")
+  fi
+
+  HTTP_LAST_STATUS=$(curl "${CURL_ARGS[@]}" "${PROXY_ARGS[@]}" "$@" "$URL" 2>/dev/null)
+  [[ -z "$HTTP_LAST_STATUS" ]] && HTTP_LAST_STATUS="000"
+
+  HTTP_LAST_HEADERS=""
+  [[ -f "$HDR_FILE" ]] && HTTP_LAST_HEADERS=$(<"$HDR_FILE")
+
+  HTTP_LAST_BODY=""
+  if [[ -f "$BODY_FILE" ]] && [[ "$METHOD" != "HEAD" ]]; then
+    HTTP_LAST_BODY=$(<"$BODY_FILE")
+  fi
+
+  # 429 → respetar Retry-After y actualizar rate-limit global
+  if [[ "$HTTP_LAST_STATUS" == "429" ]]; then
+    local RA
+    RA=$(echo "$HTTP_LAST_HEADERS" | grep -i '^Retry-After:' | grep -oP '\d+' | head -1)
+    [[ -z "$RA" ]] && RA=60
+    type log_warn &>/dev/null && log_warn "  ⏸ 429 en $URL — pausando global ${RA}s"
+    HTTP_RATE_LIMIT_UNTIL=$(( $(date +%s) + RA ))
+  fi
+
+  # 404 → marcar como muerta
+  if [[ "$HTTP_LAST_STATUS" == "404" ]]; then
+    HTTP_DEAD_URLS["$URL"]=1
+  fi
+
+  rm -f "$BODY_FILE" "$HDR_FILE"
+
+  # rc=0 si tenemos cualquier código HTTP válido. rc=1 solo en error de red.
+  [[ "$HTTP_LAST_STATUS" == "000" ]] && return 1
+  return 0
+}
+
+# ── _h_get URL [extra_curl_args...] ──────────────────────────
+# Tras la llamada: HTTP_LAST_STATUS, HTTP_LAST_HEADERS, HTTP_LAST_BODY.
+# NO usar como `$(_h_get URL)` — los globales se perderían.
+_h_get() {
+  local URL="$1"; shift
+  _h_request "GET" "$URL" "" "$@"
+}
+
+# ── _h_post URL DATA [extra_curl_args...] ────────────────────
+_h_post() {
+  local URL="$1"; local DATA="$2"; shift 2
+  _h_request "POST" "$URL" "$DATA" "$@"
+}
+
+# ── _h_head URL [extra_curl_args...] — HEAD-only ─────────────
+_h_head() {
+  local URL="$1"; shift
+  _h_request "HEAD" "$URL" "" "$@"
+}
+
+# ── _h_status URL [extra_curl_args...] — solo el código ──────
+# Echo del status (e.g. "200", "403"). HTTP_LAST_STATUS también seteada.
+# Es el ÚNICO helper que escribe a stdout — diseñado para
+# `S=$(_h_status URL)`. NO setea HTTP_LAST_STATUS en el caller (subshell).
+_h_status() {
+  local URL="$1"; shift
+  _h_request "GET" "$URL" "" "$@"
+  echo "$HTTP_LAST_STATUS"
+}
+
+# ── _h_method METHOD URL [extra_curl_args...] — método custom ─
+# Para PUT/PATCH/DELETE/OPTIONS/etc.
+_h_method() {
+  local METHOD="$1" URL="$2"; shift 2
+  _h_request "$METHOD" "$URL" "" "$@"
+}
+
+# ── Variantes _noredirect — sin -L ──────────────────────────────
+# Para módulos que sondean exposiciones explícitas (AEM JCR write,
+# actuator, hippo/drupal login). Sin -L, un 30x se queda como 30x.
+# Ver Bug #9 en project_module_fp_catalog.md.
+_h_get_noredirect() {
+  local URL="$1"; shift
+  local HTTP_NO_REDIRECT=1
+  _h_request "GET" "$URL" "" "$@"
+}
+_h_head_noredirect() {
+  local URL="$1"; shift
+  local HTTP_NO_REDIRECT=1
+  _h_request "HEAD" "$URL" "" "$@"
+}
+_h_post_noredirect() {
+  local URL="$1"; local DATA="$2"; shift 2
+  local HTTP_NO_REDIRECT=1
+  _h_request "POST" "$URL" "$DATA" "$@"
+}
+_h_method_noredirect() {
+  local METHOD="$1" URL="$2"; shift 2
+  local HTTP_NO_REDIRECT=1
+  _h_request "$METHOD" "$URL" "" "$@"
+}
+_h_status_noredirect() {
+  local URL="$1"; shift
+  local HTTP_NO_REDIRECT=1
+  _h_request "GET" "$URL" "" "$@"
+  echo "$HTTP_LAST_STATUS"
+}
+
+# ── is_likely_fp_response [ROOT_HOST] [BODY] [HEADERS] ───────
+# Combina los 3 detectores existentes:
+#   - is_cf_access_response (via headers)
+#   - is_spa_csr_body       (via body)
+#   - is_same_as_root       (via root host comparison)
+# Si BODY/HEADERS no se pasan, usa HTTP_LAST_BODY/HTTP_LAST_HEADERS del
+# último _h_* — es el caso típico tras llamar a _h_get.
+# Devuelve 0 (true) si parece un FP — el caller debe descartar/bajar severity.
+is_likely_fp_response() {
+  local ROOT="${1:-}"
+  local BODY="${2:-$HTTP_LAST_BODY}"
+  local HEADERS="${3:-$HTTP_LAST_HEADERS}"
+
+  if [[ -n "$HEADERS" ]]; then
+    is_cf_access_response "$HEADERS" && return 0
+  fi
+  if [[ -n "$BODY" ]]; then
+    is_spa_csr_body "$BODY" && return 0
+    [[ -n "$ROOT" ]] && is_same_as_root "$ROOT" "$BODY" && return 0
+  fi
+  return 1
+}
+
 # ── Stats del analizador ──────────────────────────────────────
 http_analyzer_stats() {
   echo "HTTP Analyzer:"

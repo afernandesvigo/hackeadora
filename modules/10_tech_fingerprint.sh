@@ -42,24 +42,33 @@ _update_wappalyzer_rules() {
 }
 
 # ── Parser de salida webanalyze ───────────────────────────────
-# Formato: URL  TechName Version  Category
+# Formato real (verificado con webanalyze v0.3.9): Host,Category,App,Version
+# Category puede llevar comas dentro de comillas: "Web servers,Reverse proxies"
+# Usamos python para parseo CSV correcto en lugar de IFS=',' que rompe con comillas.
 _parse_webanalyze() {
   local LINE="$1"
   local DOMAIN_ID="$2"
 
-  # webanalyze -output csv: url,tech,version,category,confidence
-  IFS=',' read -r URL TECH VERSION CATEGORY CONFIDENCE <<< "$LINE"
-  [[ -z "$URL" || -z "$TECH" ]] && return
+  # Skip header
+  [[ "$LINE" == Host,* ]] && return
 
-  # Limpiar espacios
-  URL="${URL// /}"; TECH="${TECH// /}"; VERSION="${VERSION// /}"
-  CATEGORY="${CATEGORY// /}"; CONFIDENCE="${CONFIDENCE// /}"
+  # Parseo CSV via python (maneja comillas correctamente)
+  local PARSED
+  PARSED=$(python3 -c "
+import csv, sys
+r = next(csv.reader([sys.argv[1]]))
+if len(r) >= 4:
+    print(r[0] + '|' + r[2] + '|' + r[3] + '|' + r[1])
+" "$LINE" 2>/dev/null) || return
+
+  IFS='|' read -r URL TECH VERSION CATEGORY <<< "$PARSED"
+  [[ -z "$URL" || -z "$TECH" ]] && return
 
   local SUBDOMAIN
   SUBDOMAIN=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
 
   db_upsert_tech "$DOMAIN_ID" "$URL" "$SUBDOMAIN" \
-    "$TECH" "$VERSION" "$CATEGORY" "${CONFIDENCE:-100}" "wappalyzer"
+    "$TECH" "$VERSION" "$CATEGORY" "100" "wappalyzer"
 }
 
 # ── Parser de salida httpx -json ──────────────────────────────
@@ -171,8 +180,9 @@ module_run() {
     webanalyze \
       -hosts "$TARGETS" \
       -output csv \
-      -workers 20 \
+      -worker 20 \
       -crawl 0 \
+      -silent \
       2>/dev/null \
     > "$WA_OUT" || true
 
@@ -553,6 +563,88 @@ module_run() {
   done < "$ALIVE"
 
   [[ "$VLEAK_COUNT" -gt 0 ]] && log_ok "Version leakage: $VLEAK_COUNT versiones extraídas"
+
+  # ── Capa 6: JS bundle filename version extraction ────────
+  # Lee URLs de js_files / urls (cero fetches) y matchea filenames como:
+  #   jquery-3.5.1.min.js, bootstrap.4.6.0.css, react-17.0.2.js, lodash@4.17.21.js
+  # Cubre las libs más reportadas en BBP (versiones outdated → CVEs).
+  log_info "JS bundle version scan (sin fetches, lee URLs en DB)..."
+  local JS_VER_COUNT=0
+
+  # Map: regex-en-URL → tech_name|category
+  # Usamos PCRE: captura la versión en el grupo 1
+  declare -A _JS_LIB_PATTERNS=(
+    ['jquery[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='jQuery|JS Library'
+    ['bootstrap[@._/-]v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Bootstrap|UI Framework'
+    ['lodash[@._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Lodash|JS Library'
+    ['underscore[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Underscore|JS Library'
+    ['react[@._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)\.']='React|Framework'
+    ['react-dom[@._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)\.']='React DOM|Framework'
+    ['vue[@._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)\.']='Vue.js|Framework'
+    ['angular[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='AngularJS|Framework'
+    ['@angular/core[@/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Angular|Framework'
+    ['moment[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Moment.js|JS Library'
+    ['axios[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Axios|HTTP Library'
+    ['d3[._/-]v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='D3.js|Visualization'
+    ['fontawesome[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Font Awesome|Icons'
+    ['polyfill[._-].*([0-9]+\.[0-9]+\.[0-9]+)']='polyfill|Polyfill'
+    ['select2[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Select2|UI Library'
+    ['datatables[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='DataTables|UI Library'
+    ['mathjax[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='MathJax|Math'
+    ['handlebars[._/-]v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Handlebars|Templating'
+    ['knockout[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Knockout|MVVM'
+    ['ember[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Ember.js|Framework'
+    ['backbone[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Backbone.js|Framework'
+    ['ckeditor[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='CKEditor|Editor'
+    ['tinymce[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='TinyMCE|Editor'
+    ['highlightjs[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Highlight.js|Syntax Highlighter'
+    ['highlight\.js[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Highlight.js|Syntax Highlighter'
+    ['prism[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Prism|Syntax Highlighter'
+    ['swiper[._/-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Swiper|UI Library'
+    ['slick[._-]([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Slick|UI Library'
+    ['popper\.js[@._/-]v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Popper.js|UI Library'
+    ['video\.?js[@._/-]v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)']='Video.js|Media'
+  )
+
+  # Leer todas las URLs .js / .css de este dominio (de js_files + urls)
+  # Filtrado SQL para no procesar todo el universo de URLs
+  local JS_URLS
+  JS_URLS=$(sqlite3 "$DB_PATH" "
+    SELECT DISTINCT subdomain, url FROM js_files WHERE domain_id=${DOMAIN_ID}
+    UNION
+    SELECT DISTINCT
+      CASE WHEN instr(url, '://') > 0
+           THEN substr(url, instr(url,'://')+3, instr(substr(url, instr(url,'://')+3),'/')-1)
+           ELSE '' END as subdomain,
+      url
+    FROM urls
+    WHERE domain_id=${DOMAIN_ID}
+      AND (url LIKE '%.js' OR url LIKE '%.js?%' OR url LIKE '%.css' OR url LIKE '%.css?%');
+  " 2>/dev/null)
+
+  while IFS='|' read -r SUB URL; do
+    [[ -z "$URL" ]] && continue
+    [[ -z "$SUB" ]] && SUB=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
+
+    for PAT in "${!_JS_LIB_PATTERNS[@]}"; do
+      local MATCH
+      MATCH=$(echo "$URL" | grep -oiP "$PAT" | head -1) || continue
+      [[ -z "$MATCH" ]] && continue
+
+      # Extraer versión: el primer grupo numérico tras el separador
+      local VER
+      VER=$(echo "$MATCH" | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+      [[ -z "$VER" ]] && continue
+
+      IFS='|' read -r LIB_NAME LIB_CAT <<< "${_JS_LIB_PATTERNS[$PAT]}"
+      db_upsert_tech "$DOMAIN_ID" "$URL" "$SUB" \
+        "$LIB_NAME" "$VER" "$LIB_CAT" "85" "js_filename" 2>/dev/null || true
+      ((JS_VER_COUNT++))
+    done
+  done <<< "$JS_URLS"
+
+  [[ "$JS_VER_COUNT" -gt 0 ]] && \
+    log_ok "JS bundle versions: $JS_VER_COUNT detecciones (sin fetches)"
 
   # ── Resumen en log ────────────────────────────────────────
   TOTAL_FOUND=$(sqlite3 "$DB_PATH" \

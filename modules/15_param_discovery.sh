@@ -31,7 +31,8 @@ _param_fuzz() {
 
   [[ ! -s "$PARAMS_FILE" ]] && return
 
-  local MAX_WORKERS=20          # paralelo controlado
+  # Workers configurable via env. Default 20 — bumpeable a 40 sin saturar la red de Repsol.
+  local MAX_WORKERS="${PARAM_FUZZ_PARALLEL:-20}"
   local FINDINGS_FILE
   FINDINGS_FILE=$(mktemp /tmp/pf_findings.XXXXXX)
   local DONE_FILE
@@ -52,8 +53,11 @@ _param_fuzz() {
     '../../../windows/win.ini'
     '..\..\..\windows\win.ini'
   )
-  # Patrones de detección LFI (Linux + Windows + PHP wrapper base64)
-  local LFI_DETECT='root:[x*]?:[0-9]+:[0-9]+:|/bin/(bash|sh|nologin)|www-data:|daemon:|HTTP_USER_AGENT|DB_PASS|database_password|\[boot loader\]\s*\[operating systems\]|[a-zA-Z0-9+/]{40,}={0,2}'
+  # Patrones de detección LFI (Bug #5: separar base64 — solo aplica a php://filter)
+  # _RAW: passwd/win.ini/proc/etc → siempre buscar
+  # _B64: base64 long string → SOLO cuando el payload es php://filter/...
+  local LFI_DETECT_RAW='(^|\n)root:[x*]?:[0-9]+:[0-9]+:|/bin/(bash|sh|nologin)|www-data:|daemon:|HTTP_USER_AGENT|DB_PASS|database_password|\[boot loader\][[:space:]]*\[operating systems\]'
+  local LFI_DETECT_B64='[a-zA-Z0-9+/]{60,}={0,2}'
 
   # ── SSTI: múltiples engines ──────────────────────────────────
   # Números grandes y poco frecuentes → mínima probabilidad de colisión con
@@ -112,15 +116,24 @@ _param_fuzz() {
       local PNAME_CLEAN="${PNAME// /}"
 
       # ── SQLi ──────────────────────────────────────────────
+      # Bug #10: regex estricto + comparación diferencial vs baseline + skip Salesforce/Aura.
       local R
       R=$(_send_payload "$URL" "$PNAME_CLEAN" "'" "$METHOD" "$QUERY")
       local RBODY="${R%###S###*}"
-      if echo "$RBODY" | grep -qiE \
-        "sql syntax|mysql_fetch|ORA-[0-9]{4,}|postgresql.*error|sqlite.*error|\
-odbc.*driver|unclosed quotation|syntax error.*near|you have an error in your sql|\
-warning.*mysql|division by zero|supplied argument is not a valid|pg_query\(\)|DB Error"; then
-        echo "sqli_error|high|${URL}|SQLi error-based en param '${PNAME_CLEAN}'" \
-          >> "$FINDINGS_FILE"
+      # Patrones line-anchored y específicos de errores DB reales (no strings genéricos del framework)
+      local SQLI_PATTERN='ORA-[0-9]{5}|MySQL.*at line [0-9]+|unterminated quoted string at or near|near "[^"]*" at line [0-9]+|Microsoft SQL Server.*Line [0-9]+|Postgres ERROR: .*at character [0-9]+|sqlite3\.OperationalError|psycopg2\.errors|java\.sql\.SQLException:|ORA-00933|ORA-00936|ORA-01756|You have an error in your SQL syntax|Unclosed quotation mark after the character string|conversion failed when converting'
+      if echo "$RBODY" | grep -qE "$SQLI_PATTERN"; then
+        # Confirmación diferencial: el patrón debe aparecer SOLO con payload, no en baseline
+        local BASELINE_R BASELINE_BODY
+        BASELINE_R=$(_send_payload "$URL" "$PNAME_CLEAN" "x" "$METHOD" "$QUERY")
+        BASELINE_BODY="${BASELINE_R%###S###*}"
+        if ! echo "$BASELINE_BODY" | grep -qE "$SQLI_PATTERN"; then
+          # Skip si la página es Salesforce Lightning/Aura (FP conocido)
+          if ! echo "$RBODY" | grep -qE 'Aura\.Component|salesforce\.com|/auraFW/|aura:|sforce\.one'; then
+            echo "sqli_error|high|${URL}|SQLi error-based en param '${PNAME_CLEAN}'" \
+              >> "$FINDINGS_FILE"
+          fi
+        fi
       fi
 
       # ── SSTI ─────────────────────────────────────────────
@@ -162,11 +175,23 @@ read|pg|php_path|style|pdf|fn|filename|dir|directory|module|content|layout|conf|
         for LFI_P in "${LFI_PAYLOADS[@]}"; do
           R=$(_send_payload "$URL" "$PNAME_CLEAN" "$LFI_P" "$METHOD" "$QUERY")
           RBODY="${R%###S###*}"
-          # PHP wrapper: el body será base64, buscar longitud razonable
-          if echo "$RBODY" | grep -qE "$LFI_DETECT"; then
+          # Bug #5: regex base64 SOLO si el payload usa php://filter (LFI vía wrapper).
+          # En otros casos, base64 long match = CSRF token / asset hash genérico (FP).
+          if echo "$RBODY" | grep -qE "$LFI_DETECT_RAW"; then
             LFI_HIT=1
             USED_PAYLOAD="$LFI_P"
             break
+          fi
+          if [[ "$LFI_P" == php://* ]] && echo "$RBODY" | grep -qE "$LFI_DETECT_B64"; then
+            # Confirmar que NO es el body baseline (descartar matches que aparecen sin payload)
+            local BASELINE_BODY
+            BASELINE_BODY=$(_send_payload "$URL" "$PNAME_CLEAN" "1" "$METHOD" "$QUERY")
+            BASELINE_BODY="${BASELINE_BODY%###S###*}"
+            if ! echo "$BASELINE_BODY" | grep -qE "$LFI_DETECT_B64"; then
+              LFI_HIT=1
+              USED_PAYLOAD="$LFI_P"
+              break
+            fi
           fi
         done
         if [[ "$LFI_HIT" -eq 1 ]]; then
@@ -230,7 +255,11 @@ read|pg|php_path|style|pdf|fn|filename|dir|directory|module|content|layout|conf|
     done
   }
 
-  # ── Dispatcher paralelo con semáforo ─────────────────────────
+  # ── Dispatcher paralelo con semáforo (Performance fix 2026-05-09) ─
+  # Bug previo: el contador ACTIVE se reseteaba a 0 tras `wait -n`, pero
+  # solo 1 job había terminado — los otros (MAX_WORKERS-1) seguían vivos.
+  # Resultado: throughput real ≈ MAX_WORKERS/MAX_WORKERS jobs/secuencial.
+  # Fix: solo decrementar ACTIVE en 1 al wait -n.
   local ACTIVE=0
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
@@ -240,10 +269,9 @@ read|pg|php_path|style|pdf|fn|filename|dir|directory|module|content|layout|conf|
     ( _fuzz_url "$URL" ) &
 
     (( ++ACTIVE ))
-    if (( ACTIVE >= MAX_WORKERS )); then
-      wait -n 2>/dev/null || wait
-      ACTIVE=0
-    fi
+    while (( ACTIVE >= MAX_WORKERS )); do
+      wait -n 2>/dev/null && (( --ACTIVE )) || break
+    done
   done < "$PARAMS_FILE"
   wait
 
@@ -339,24 +367,27 @@ module_run() {
     if [[ -z "$SINGLE_SUB" && -s "$ALIVE" ]]; then
       local SUB_COUNT
       SUB_COUNT=$(wc -l < "$ALIVE" | tr -d ' ')
-      log_info "paramspider sobre $SUB_COUNT subdominios (paralelo)..."
+      local SPIDER_PARALLEL="${PARAMSPIDER_PARALLEL:-8}"
+      log_info "paramspider sobre $SUB_COUNT subdominios (paralelo, ${SPIDER_PARALLEL} workers)..."
 
       local SPIDER_TMP="$OUT_DIR/.paramspider_subs"
       mkdir -p "$SPIDER_TMP"
 
-      while IFS= read -r SUB; do
-        [[ -z "$SUB" ]] && continue
-        (
-          timeout 60 paramspider -d "$SUB" -s 2>/dev/null \
-            | grep -iE "https?://(([a-z0-9-]+\.)*${DOMAIN//./\\.})" \
-            | grep '?' \
-            > "$SPIDER_TMP/${SUB}.txt" 2>/dev/null || true
-        ) &
-      done < "$ALIVE"
-      wait
+      # Throttling con xargs -P para evitar 99 procesos simultáneos saturando Wayback API
+      export DOMAIN_RE_ESC="${DOMAIN//./\\.}"
+      export SPIDER_TMP
+      < "$ALIVE" xargs -I{} -P "$SPIDER_PARALLEL" -n 1 bash -c '
+        SUB="$1"
+        [[ -z "$SUB" ]] && exit 0
+        timeout 60 paramspider -d "$SUB" -s 2>/dev/null \
+          | grep -iE "https?://(([a-z0-9-]+\.)*${DOMAIN_RE_ESC})" \
+          | grep "?" \
+          > "${SPIDER_TMP}/${SUB}.txt" 2>/dev/null || true
+      ' _ {}
+      unset DOMAIN_RE_ESC SPIDER_TMP
 
-      cat "$SPIDER_TMP"/*.txt 2>/dev/null >> "$PARAMS_OUT" || true
-      rm -rf "$SPIDER_TMP"
+      cat "$OUT_DIR/.paramspider_subs"/*.txt 2>/dev/null >> "$PARAMS_OUT" || true
+      rm -rf "$OUT_DIR/.paramspider_subs"
     fi
 
     sort -u "$PARAMS_OUT" -o "$PARAMS_OUT"
@@ -458,41 +489,22 @@ module_run() {
   log_info "$TOTAL_PARAMS URLs con parámetros encontradas en total"
 
   # ── 4. Guardar en DB y añadir a la rueda ─────────────────────
-  local NEW_PARAMS=0
+  # db_add_url popula automáticamente url_params heredando source,
+  # así que solo necesitamos invocarlo y contar params nuevos.
+  local PARAMS_BEFORE PARAMS_AFTER NEW_PARAMS=0
+  PARAMS_BEFORE=$(sqlite3 "$DB_PATH" \
+    "SELECT COUNT(*) FROM url_params WHERE domain_id=${DOMAIN_ID};" \
+    2>/dev/null || echo 0)
 
   while IFS= read -r PARAM_URL; do
     [[ -z "$PARAM_URL" ]] && continue
-
-    local BASE="${PARAM_URL%%\?*}"
-    local QUERY="${PARAM_URL#*\?}"
-
-    # Guardar cada param individualmente — proceso sustitución para que
-    # NEW_PARAMS++ sea visible en el scope padre (evita subshell de pipe)
-    while IFS='=' read -r PNAME _; do
-      [[ -z "$PNAME" ]] && continue
-      local PNAME_CLEAN="${PNAME// /}"
-      local BASE_ESC="${BASE//\'/\'\'}"
-      local PNAME_ESC="${PNAME_CLEAN//\'/\'\'}"
-
-      local BEFORE
-      BEFORE=$(sqlite3 "$DB_PATH" \
-        "SELECT COUNT(*) FROM url_params
-         WHERE domain_id=${DOMAIN_ID} AND url='${BASE_ESC}' AND param_name='${PNAME_ESC}';" \
-        2>/dev/null || echo "1")
-
-      sqlite3 "$DB_PATH" \
-        "INSERT OR IGNORE INTO url_params(domain_id,url,param_name,source)
-         VALUES(${DOMAIN_ID},'${BASE_ESC}','${PNAME_ESC}','param_discovery');" \
-        2>/dev/null || true
-
-      [[ "${BEFORE:-1}" == "0" ]] && ((NEW_PARAMS++))
-
-    done < <(echo "$QUERY" | tr '&' '\n')
-
-    # URL completa (con params) entra en la rueda para nuclei/fuzzing
     db_add_url "$DOMAIN_ID" "$PARAM_URL" "param_discovery" ""
-
   done < "$PARAMS_OUT"
+
+  PARAMS_AFTER=$(sqlite3 "$DB_PATH" \
+    "SELECT COUNT(*) FROM url_params WHERE domain_id=${DOMAIN_ID};" \
+    2>/dev/null || echo 0)
+  NEW_PARAMS=$(( PARAMS_AFTER - PARAMS_BEFORE ))
 
   # ── 5. Notificar params jugosos ───────────────────────────────
   local JUICY_PATTERN='[?&](url|redirect|next|dest|target|path|file|page|include|src|href|link|load|fetch|request|uri|site|html|data|ref|return|callback|id|user|uid|account|admin|token|key|api|secret|pass|pwd|auth|session|cmd|exec|command|query|search|q|input|debug|test|env)\b'

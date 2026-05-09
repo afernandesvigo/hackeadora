@@ -57,11 +57,15 @@ module_run() {
   jq -c '.[]' "$TMP_OUT" 2>/dev/null > "$TMP_LINES" || cp "$TMP_OUT" "$TMP_LINES"
 
   # Parsear y guardar en DB (ya una línea = un JSON object)
+  # 1) tabla `subdomains.tech` con la lista de plugins (compat existente)
+  # 2) tabla `technologies` con name + version (extraída de .plugins[].version[0])
+  local TECH_VER_COUNT=0
   if [[ -s "$TMP_LINES" ]] && command -v jq &>/dev/null; then
     while IFS= read -r LINE; do
-      local TARGET PLUGINS TECH_JSON
-      TARGET=$(echo "$LINE" | jq -r '.target // ""' 2>/dev/null | sed 's|https\?://||;s|/.*||') || continue
-      [[ -z "$TARGET" ]] && continue
+      local TARGET TARGET_URL PLUGINS TECH_JSON
+      TARGET_URL=$(echo "$LINE" | jq -r '.target // ""' 2>/dev/null) || continue
+      [[ -z "$TARGET_URL" ]] && continue
+      TARGET=$(echo "$TARGET_URL" | sed 's|https\?://||;s|/.*||')
 
       PLUGINS=$(echo "$LINE" | jq -r '[.plugins | keys[]] | join(", ")' 2>/dev/null || echo "")
       TECH_JSON=$(echo "$LINE" | jq -c '.plugins | keys' 2>/dev/null || echo "[]")
@@ -71,11 +75,22 @@ module_run() {
         sqlite3 "$DB_PATH" \
           "UPDATE subdomains SET tech='${TECH_JSON//\'/\'\'}'
            WHERE domain_id=${DOMAIN_ID} AND subdomain='${TARGET}';" 2>/dev/null || true
+
+        # Poblar tabla `technologies`. Iteramos cada plugin para extraer su versión.
+        # Formato whatweb: {"PluginName": {"version": ["1.2.3"], "string": [...]}}
+        while IFS=$'\t' read -r TNAME TVER; do
+          [[ -z "$TNAME" ]] && continue
+          db_upsert_tech "$DOMAIN_ID" "$TARGET_URL" "$TARGET" \
+            "$TNAME" "$TVER" "" "70" "whatweb"
+          [[ -n "$TVER" ]] && ((TECH_VER_COUNT++))
+        done < <(echo "$LINE" | jq -r '.plugins | to_entries[] | "\(.key)\t\(.value.version[0] // "")"' 2>/dev/null)
       fi
 
       echo "$LINE" >> "$OUT_JSON"
     done < "$TMP_LINES"
   fi
+  [[ "$TECH_VER_COUNT" -gt 0 ]] && \
+    log_ok "  ✦ whatweb extrajo $TECH_VER_COUNT versiones a tabla technologies"
 
   rm -f "$TMP_OUT" "$TMP_LINES"
   local RESULT_COUNT

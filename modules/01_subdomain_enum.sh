@@ -13,6 +13,11 @@
 #   SUBDOMAIN_ENUM_DEPTH=3        — rondas recursivas (0 = solo raíz)
 #   SUBDOMAIN_ENUM_PARALLEL=20    — jobs concurrentes por ronda
 #   SUBDOMAIN_WORDLIST=path       — wordlist para brute-force
+#   SUBDOMAIN_BRUTE_MAX_DEPTH=3   — profundidad máxima del subdominio sobre el
+#                                   que se hace bruteforce (sub1.sub2.sub3.dom.tld
+#                                   = depth 3). Por encima, solo se aceptan
+#                                   subs descubiertos pasivamente, sin generar
+#                                   nuevos niveles via wordlist.
 #   BBOT_TIMEOUT=600              — timeout bbot en segundos
 # ============================================================
 
@@ -22,6 +27,20 @@ MODULE_DESC="Enumeración de subdominios"
 # ── Comprueba si un hostname resuelve DNS ──────────────────
 _resolves() {
   ${PROXYCHAINS_CMD:-} dig +short +timeout=3 +tries=1 "$1" 2>/dev/null | grep -qE '[0-9a-fA-F:.]'
+}
+
+# ── Cuenta niveles de subdomain bajo el dominio raíz ────────
+# foo.bar.example.com con root example.com → 2
+# example.com con root example.com → 0
+_subdomain_depth() {
+  local TARGET="$1" ROOT="$2"
+  # Ya es el root o no termina en él → depth 0 (no aplica)
+  [[ "$TARGET" == "$ROOT" ]] && { echo 0; return; }
+  [[ "$TARGET" != *".${ROOT}" ]] && { echo 0; return; }
+  local PREFIX="${TARGET%.${ROOT}}"
+  # Cuenta segmentos del prefix: separadores '.' + 1
+  local DOTS="${PREFIX//[^.]/}"
+  echo $(( ${#DOTS} + 1 ))
 }
 
 # ── Resolver una lista de candidatos → solo los que tienen DNS
@@ -54,13 +73,24 @@ _resolve_list() {
 }
 
 # ── Brute-force con wordlist pequeña ──────────────────────
+# Genera ${WORD}.${TARGET}. Si TARGET ya está en el límite de profundidad
+# (SUBDOMAIN_BRUTE_MAX_DEPTH, default 3), el resultado superaría el límite
+# y se salta — evita expansión combinatoria sub1.sub2.sub3.sub4....
 _enum_bruteforce() {
   local TARGET="$1"
   local OUT_FILE="$2"
   local ROOT_DOMAIN="$3"
   local WORDLIST="${SUBDOMAIN_WORDLIST:-${SCRIPT_DIR}/data/subdomains_small.txt}"
+  local MAX_DEPTH="${SUBDOMAIN_BRUTE_MAX_DEPTH:-3}"
 
   [[ ! -f "$WORDLIST" ]] && return 0
+
+  local TARGET_DEPTH
+  TARGET_DEPTH=$(_subdomain_depth "$TARGET" "$ROOT_DOMAIN")
+  # Bruteforce añade 1 nivel; saltar si ya estamos en el límite
+  if [[ "$TARGET_DEPTH" -ge "$MAX_DEPTH" ]]; then
+    return 0
+  fi
 
   local CANDS
   CANDS=$(mktemp)

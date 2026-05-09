@@ -88,6 +88,27 @@ _is_likely_false_positive() {
     [[ "$VAL" == *"$PAT"* ]] && return 0
     [[ "$CTX" == *"$PAT"* ]] && return 0
   done
+
+  # Bug #12: extraer la parte VALUE (entre comillas) y validar entropy mínima.
+  # Patterns como TOKEN_VAR/SECRET_VAR/API_KEY_VAR matchean `name = "value"` —
+  # el value debe tener entropy real, no ser un identifier truncado.
+  local VALUE_PART
+  # Bash 3.2+ regex extract (el último token entre comillas)
+  if [[ "$VAL" =~ [\'\"]([^\'\"]+)[\'\"][[:space:]]*$ ]]; then
+    VALUE_PART="${BASH_REMATCH[1]}"
+  fi
+  if [[ -n "$VALUE_PART" ]]; then
+    local VLEN=${#VALUE_PART}
+    # Mínimo 12 caracteres para considerar secret real
+    [[ "$VLEN" -lt 12 ]] && return 0
+    # Debe contener al menos un dígito y una letra (entropy básica)
+    [[ ! "$VALUE_PART" =~ [0-9] ]] && return 0
+    [[ ! "$VALUE_PART" =~ [A-Za-z] ]] && return 0
+    # Rechazar identifier-only: solo alphanum lowercase sin separadores → probable nombre var
+    if [[ "$VALUE_PART" =~ ^[a-z]+$ ]]; then
+      return 0
+    fi
+  fi
   return 1
 }
 
@@ -439,10 +460,11 @@ module_run() {
   local ANALYZED=0
 
   # ── Procesar JS en paralelo (MAX_PARALLEL workers) ────────
-  local MAX_PARALLEL="${JS_PARALLEL:-8}"
+  # Default bumped 8→16 (Performance fix 2026-05-09). 25 min / 99 hosts → ~5 min con 16 workers.
+  local MAX_PARALLEL="${JS_PARALLEL:-16}"
   local COUNT_DIR="$WORK_DIR/.counts"
   mkdir -p "$COUNT_DIR"
-  local PIDS=()
+  local ACTIVE=0
 
   while IFS= read -r JS_URL; do
     [[ -z "$JS_URL" ]] && continue
@@ -457,17 +479,16 @@ module_run() {
       R=$(_analyze_js_file "$JS_URL" "$DOMAIN_ID" "$DOMAIN" "$WORK_DIR")
       echo "${R:-0 0}" > "$RESULT_FILE"
     ) &
-    PIDS+=($!)
+    (( ++ACTIVE ))
 
-    # Throttle: esperar al job más antiguo cuando llegamos al límite
-    if [[ ${#PIDS[@]} -ge $MAX_PARALLEL ]]; then
-      wait "${PIDS[0]}" 2>/dev/null || true
-      PIDS=("${PIDS[@]:1}")
-    fi
+    # Throttle: cuando llegamos al límite, esperar a que UN job termine (no a TODOS)
+    while (( ACTIVE >= MAX_PARALLEL )); do
+      wait -n 2>/dev/null && (( --ACTIVE )) || break
+    done
   done < "$JS_LIST"
 
   # Esperar jobs restantes
-  [[ ${#PIDS[@]} -gt 0 ]] && wait "${PIDS[@]}" 2>/dev/null || true
+  wait 2>/dev/null || true
 
   # Recopilar contadores de archivos de resultado
   while IFS= read -r -d '' RFILE; do

@@ -50,16 +50,16 @@ _csp_finding() {
 
 # ── Análisis de una URL concreta ──────────────────────────────
 _analyze_csp_url() {
-  local URL="$1" DOMAIN_ID="$2" DOMAIN="$3" PROXY_FLAG="$4"
+  local URL="$1" DOMAIN_ID="$2" DOMAIN="$3" PROXY_FLAG="$4"  # PROXY_FLAG ignorado
 
+  _h_head "$URL"
   local CSP
-  CSP=$(curl -sk --max-time 15 -I "$URL" ${PROXY_FLAG} 2>/dev/null | \
-    grep -i "^content-security-policy:" | head -1 | sed 's/^[^:]*://;s/\r//')
+  CSP=$(echo "$HTTP_LAST_HEADERS" | grep -i "^content-security-policy:" | head -1 | sed 's/^[^:]*://;s/\r//')
 
   if [[ -z "$CSP" ]]; then
     # Algunos servidores solo envían CSP en respuestas GET
-    CSP=$(curl -sk --max-time 15 -o /dev/null -D - "$URL" ${PROXY_FLAG} 2>/dev/null | \
-      grep -i "^content-security-policy:" | head -1 | sed 's/^[^:]*://;s/\r//')
+    _h_get "$URL"
+    CSP=$(echo "$HTTP_LAST_HEADERS" | grep -i "^content-security-policy:" | head -1 | sed 's/^[^:]*://;s/\r//')
   fi
 
   [[ -z "$CSP" ]] && return
@@ -202,6 +202,7 @@ module_run() {
   log_phase "Módulo 32 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

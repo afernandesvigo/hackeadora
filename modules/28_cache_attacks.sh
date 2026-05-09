@@ -88,10 +88,10 @@ _cache_buster() {
 # ── Detectar si hay caché activa en un host ───────────────────
 _detect_cache() {
   local URL="$1"
-  local PROXY_FLAG="$2"
+  local PROXY_FLAG="$2"  # ignorado: _h_* auto-inyecta
 
-  local HEADERS
-  HEADERS=$(curl -sI --max-time 10 ${PROXY_FLAG} "$URL" 2>/dev/null)
+  _h_head "$URL"
+  local HEADERS="$HTTP_LAST_HEADERS"
 
   local CDN=""
   for INDICATOR in "${CACHE_INDICATORS[@]}"; do
@@ -141,17 +141,10 @@ _test_cache_poisoning() {
     local TEST_URL="${BASE_URL}?${CB}=1"
     local CANARY="hackeadora-poison-test.${CB}"
 
-    local BODY STATUS RESPONSE_HEADERS
-    RESPONSE_HEADERS=$(curl -sI --max-time 10 ${PROXY_FLAG} \
-      -H "${HEADER}: ${CANARY}" \
-      "$TEST_URL" 2>/dev/null)
-    BODY=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-      -H "${HEADER}: ${CANARY}" \
-      "$TEST_URL" 2>/dev/null | head -c 5000)
-    STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-      -H "${HEADER}: ${CANARY}" \
-      -o /dev/null -w "%{http_code}" \
-      "$TEST_URL" 2>/dev/null)
+    _h_get "$TEST_URL" -H "${HEADER}: ${CANARY}"
+    local BODY="${HTTP_LAST_BODY:0:5000}"
+    local STATUS="$HTTP_LAST_STATUS"
+    local RESPONSE_HEADERS="$HTTP_LAST_HEADERS"
 
     # ¿Se refleja el canary en la respuesta?
     if echo "$BODY" | grep -qF "$CANARY"; then
@@ -159,9 +152,8 @@ _test_cache_poisoning() {
 
       # Verificar si la respuesta se cacheó
       # Hacer una segunda petición SIN el header y ver si sigue el canary
-      local BODY2
-      BODY2=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-        "$TEST_URL" 2>/dev/null | head -c 5000)
+      _h_get "$TEST_URL"
+      local BODY2="${HTTP_LAST_BODY:0:5000}"
 
       if echo "$BODY2" | grep -qF "$CANARY"; then
         log_warn "  🔴 CACHE POISONING CONFIRMADO: ${HEADER} → respuesta cacheada con canary"
@@ -269,8 +261,7 @@ PATHS
 
     # Verificar que el endpoint existe y da 200 (o redirige)
     local DYN_STATUS
-    DYN_STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${PROXY_FLAG} \
-      -o /dev/null -w "%{http_code}" "$DYN_URL" 2>/dev/null)
+    DYN_STATUS=$(_h_status "$DYN_URL")
     [[ "$DYN_STATUS" != "200" && "$DYN_STATUS" != "302" && "$DYN_STATUS" != "301" ]] && continue
 
     # ── MÉTODO A: Delimiter confusion ──────────────────────
@@ -280,23 +271,15 @@ PATHS
         CB=$(_cache_buster)
         local TEST_URL="${DYN_URL}${DELIM}${CB}.${EXT}"
 
-        local BODY RESP_HEADERS STATUS
-        STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-          -o /tmp/.wcd_test_$$ \
-          -D /tmp/.wcd_headers_$$ \
-          -w "%{http_code}" "$TEST_URL" 2>/dev/null)
-        BODY=$(cat /tmp/.wcd_test_$$ 2>/dev/null | head -c 3000)
-        RESP_HEADERS=$(cat /tmp/.wcd_headers_$$ 2>/dev/null)
-        rm -f /tmp/.wcd_test_$$ /tmp/.wcd_headers_$$
+        _h_get "$TEST_URL"
+        local STATUS="$HTTP_LAST_STATUS"
+        local BODY="${HTTP_LAST_BODY:0:3000}"
+        local RESP_HEADERS="$HTTP_LAST_HEADERS"
 
         [[ "$STATUS" != "200" ]] && continue
 
-        # Descartar: SPA CSR (el mismo HTML vacío para todas las rutas)
-        # o respuesta de CF Access — lo cacheado no contiene datos de usuario.
-        is_cf_access_response "$RESP_HEADERS" && continue
-        is_spa_csr_body "$BODY" && continue
-        is_same_as_root "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" \
-          "$BODY" "$PROXY_FLAG" && continue
+        # Descartar: SPA CSR / CF Access / same-as-root.
+        is_likely_fp_response "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" "$BODY" "$RESP_HEADERS" && continue
 
         # Verificar si la respuesta contiene contenido dinámico real
         # (datos de usuario, tokens, información sensible)
@@ -339,22 +322,14 @@ PATHS
         CB=$(_cache_buster)
         local TEST_URL="${DYN_URL}/..%2F${STATIC_DIR}%2F${CB}.${EXT}"
 
-        local STATUS RESP_HEADERS BODY
-        STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-          --path-as-is \
-          -o /tmp/.wcd_b_$$ \
-          -D /tmp/.wcd_bh_$$ \
-          -w "%{http_code}" "$TEST_URL" 2>/dev/null)
-        BODY=$(cat /tmp/.wcd_b_$$ 2>/dev/null | head -c 3000)
-        RESP_HEADERS=$(cat /tmp/.wcd_bh_$$ 2>/dev/null)
-        rm -f /tmp/.wcd_b_$$ /tmp/.wcd_bh_$$
+        _h_get "$TEST_URL" --path-as-is
+        local STATUS="$HTTP_LAST_STATUS"
+        local BODY="${HTTP_LAST_BODY:0:3000}"
+        local RESP_HEADERS="$HTTP_LAST_HEADERS"
 
         [[ "$STATUS" != "200" ]] && continue
 
-        is_cf_access_response "$RESP_HEADERS" && continue
-        is_spa_csr_body "$BODY" && continue
-        is_same_as_root "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" \
-          "$BODY" "$PROXY_FLAG" && continue
+        is_likely_fp_response "$(echo "$DYN_URL" | grep -oP 'https?://[^/]+')" "$BODY" "$RESP_HEADERS" && continue
         echo "$BODY" | grep -qiP 'email|user|token|csrf|session|account|profile' || continue
         _is_cached "$RESP_HEADERS" || continue
 
@@ -380,14 +355,10 @@ PATHS
       CB=$(_cache_buster)
       local TEST_URL="${DYN_URL}/${CB}.${EXT}"
 
-      local STATUS RESP_HEADERS BODY
-      STATUS=$(curl -sL -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 ${PROXY_FLAG} \
-        -o /tmp/.wcd_c_$$ \
-        -D /tmp/.wcd_ch_$$ \
-        -w "%{http_code}" "$TEST_URL" 2>/dev/null)
-      BODY=$(cat /tmp/.wcd_c_$$ 2>/dev/null | head -c 3000)
-      RESP_HEADERS=$(cat /tmp/.wcd_ch_$$ 2>/dev/null)
-      rm -f /tmp/.wcd_c_$$ /tmp/.wcd_ch_$$
+      _h_get "$TEST_URL"
+      local STATUS="$HTTP_LAST_STATUS"
+      local BODY="${HTTP_LAST_BODY:0:3000}"
+      local RESP_HEADERS="$HTTP_LAST_HEADERS"
 
       [[ "$STATUS" != "200" ]] && continue
 
@@ -441,6 +412,7 @@ module_run() {
   log_phase "Módulo 28 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

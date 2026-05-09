@@ -167,36 +167,26 @@ _scan_spa_config() {
 
   for CONFIG_PATH in "${SPA_CONFIG_PATHS[@]}"; do
     local URL="${BASE}${CONFIG_PATH}"
-    local STATUS BODY
-    STATUS=$(curl -sk --max-time 8 ${PROXY} \
-      -o /tmp/.spa_body_$$ -w "%{http_code}" \
-      -H "Accept: application/json, text/plain, */*" \
-      "$URL" 2>/dev/null)
-    BODY=$(cat /tmp/.spa_body_$$ 2>/dev/null)
-    rm -f /tmp/.spa_body_$$
+    _h_get "$URL" -H "Accept: application/json, text/plain, */*"
+    local STATUS="$HTTP_LAST_STATUS"
+    local BODY="$HTTP_LAST_BODY"
 
     # WAF bypass si 403: probar variantes de encoding del path
     if [[ "$STATUS" == "403" || "$STATUS" == "401" || "$STATUS" == "406" ]]; then
-      local BYPASS_STATUS BYPASS_BODY
-
       # Variante 1: %2f en lugar de / en el path del config
       local ENCODED_PATH
       ENCODED_PATH=$(echo "$CONFIG_PATH" | sed 's|/|%2f|g; s|^%2f|/|')
-      BYPASS_STATUS=$(curl -sk --max-time 8 ${PROXY} -g \
-        -o /tmp/.spa_bp_$$ -w "%{http_code}" "${BASE}${ENCODED_PATH}" 2>/dev/null)
-      BYPASS_BODY=$(cat /tmp/.spa_bp_$$ 2>/dev/null); rm -f /tmp/.spa_bp_$$
-      if [[ "$BYPASS_STATUS" == "200" ]]; then
-        STATUS="$BYPASS_STATUS"; BODY="$BYPASS_BODY"; URL="${BASE}${ENCODED_PATH}"
+      _h_get "${BASE}${ENCODED_PATH}" -g
+      if [[ "$HTTP_LAST_STATUS" == "200" ]]; then
+        STATUS="$HTTP_LAST_STATUS"; BODY="$HTTP_LAST_BODY"; URL="${BASE}${ENCODED_PATH}"
       fi
 
       # Variante 2: Tomcat ;/ bypass — /;/assets/environments/environment.json
       if [[ "$STATUS" != "200" ]]; then
         local SC_PATH="/;${CONFIG_PATH}"
-        BYPASS_STATUS=$(curl -sk --max-time 8 ${PROXY} -g \
-          -o /tmp/.spa_sc_$$ -w "%{http_code}" "${BASE}${SC_PATH}" 2>/dev/null)
-        BYPASS_BODY=$(cat /tmp/.spa_sc_$$ 2>/dev/null); rm -f /tmp/.spa_sc_$$
-        if [[ "$BYPASS_STATUS" == "200" ]]; then
-          STATUS="$BYPASS_STATUS"; BODY="$BYPASS_BODY"; URL="${BASE}${SC_PATH}"
+        _h_get "${BASE}${SC_PATH}" -g
+        if [[ "$HTTP_LAST_STATUS" == "200" ]]; then
+          STATUS="$HTTP_LAST_STATUS"; BODY="$HTTP_LAST_BODY"; URL="${BASE}${SC_PATH}"
         fi
       fi
 
@@ -204,11 +194,9 @@ _scan_spa_config() {
       if [[ "$STATUS" != "200" ]]; then
         local DOT_PATH
         DOT_PATH=$(echo "$CONFIG_PATH" | sed 's|/assets/|/assets/./|')
-        BYPASS_STATUS=$(curl -sk --max-time 8 ${PROXY} -g \
-          -o /tmp/.spa_dot_$$ -w "%{http_code}" "${BASE}${DOT_PATH}" 2>/dev/null)
-        BYPASS_BODY=$(cat /tmp/.spa_dot_$$ 2>/dev/null); rm -f /tmp/.spa_dot_$$
-        if [[ "$BYPASS_STATUS" == "200" ]]; then
-          STATUS="$BYPASS_STATUS"; BODY="$BYPASS_BODY"; URL="${BASE}${DOT_PATH}"
+        _h_get "${BASE}${DOT_PATH}" -g
+        if [[ "$HTTP_LAST_STATUS" == "200" ]]; then
+          STATUS="$HTTP_LAST_STATUS"; BODY="$HTTP_LAST_BODY"; URL="${BASE}${DOT_PATH}"
         fi
       fi
     fi
@@ -275,6 +263,7 @@ module_run() {
   log_phase "Módulo 36 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

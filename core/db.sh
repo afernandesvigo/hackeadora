@@ -62,9 +62,12 @@ CREATE TABLE IF NOT EXISTS findings (
   target      TEXT NOT NULL,
   template    TEXT,
   detail      TEXT,
+  confidence  TEXT DEFAULT 'unverified',  -- high | medium | low | unverified
   notified    INTEGER DEFAULT 0,
   found_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- Migración: añadir columna confidence si la tabla existe sin ella (refactor 2026-05-09).
+-- ALTER TABLE en sqlite no soporta IF NOT EXISTS, lo hacemos vía PRAGMA en bash.
 
 -- Tecnologías detectadas por URL
 CREATE TABLE IF NOT EXISTS technologies (
@@ -99,6 +102,8 @@ CREATE TABLE IF NOT EXISTS scan_history (
 SQL
   # Migración: añadir columna blanket_403 a DBs existentes
   sqlite3 -cmd ".timeout 30000" "$DB_PATH" "ALTER TABLE subdomains ADD COLUMN blanket_403 INTEGER DEFAULT 0;" 2>/dev/null || true
+  # Migración: añadir columna confidence a findings (refactor 2026-05-09)
+  sqlite3 -cmd ".timeout 30000" "$DB_PATH" "ALTER TABLE findings ADD COLUMN confidence TEXT DEFAULT 'unverified';" 2>/dev/null || true
 
   log_ok "Base de datos inicializada: $DB_PATH"
   db_init_js
@@ -196,6 +201,10 @@ db_is_blanket_403() {
 }
 
 # ── URLs ──────────────────────────────────────────────────────
+# Inserta URL en `urls` y, si tiene query string, extrae cada param a
+# `url_params`. La extracción es local (sin HTTP), heredando `source`.
+# Esto garantiza que cualquier módulo (crawler, gau, wayback, etc.) que
+# llame db_add_url popule también url_params automáticamente.
 db_add_url() {
   local DOMAIN_ID="$1"
   local URL="$2"
@@ -205,6 +214,34 @@ db_add_url() {
 
   _db "INSERT OR IGNORE INTO urls(domain_id,url,source,status_code)
        VALUES(${DOMAIN_ID},'${URL_ESC}','${SOURCE}','${STATUS}');"
+
+  # Auto-extracción de params si la URL tiene query string
+  [[ "$URL" != *\?* ]] && return 0
+
+  local BASE="${URL%%\?*}"
+  local QUERY="${URL#*\?}"
+  local BASE_ESC="${BASE//\'/\'\'}"
+  local SOURCE_ESC="${SOURCE//\'/\'\'}"
+
+  # Construir batch INSERT por param (más rápido que N llamadas a sqlite3)
+  local SQL="" PNAME PNAME_CLEAN PNAME_ESC KV
+  local -a KVS
+  IFS='&' read -ra KVS <<< "$QUERY"
+  for KV in "${KVS[@]}"; do
+    PNAME="${KV%%=*}"
+    PNAME_CLEAN="${PNAME// /}"
+    # Filtrar nombres vacíos, placeholder FUZZ, y nombres no plausibles
+    [[ -z "$PNAME_CLEAN" ]] && continue
+    [[ "$PNAME_CLEAN" == "FUZZ" ]] && continue
+    # Validar caracteres: param names razonables (alfanumérico + . _ - [ ])
+    [[ "$PNAME_CLEAN" =~ ^[][A-Za-z0-9._-]+$ ]] || continue
+    # Evitar nombres absurdamente largos (>100 chars suele ser basura/inyección)
+    [[ "${#PNAME_CLEAN}" -gt 100 ]] && continue
+    PNAME_ESC="${PNAME_CLEAN//\'/\'\'}"
+    SQL+="INSERT OR IGNORE INTO url_params(domain_id,url,param_name,source) VALUES(${DOMAIN_ID},'${BASE_ESC}','${PNAME_ESC}','${SOURCE_ESC}');"
+  done
+
+  [[ -n "$SQL" ]] && _db "$SQL"
 }
 
 # Devuelve 1 si la URL es nueva
@@ -251,6 +288,11 @@ db_mark_url_nuclei_done() {
 }
 
 # ── Findings ──────────────────────────────────────────────────
+# db_add_finding domain_id type severity target [template] [detail] [confidence]
+# confidence: high (PoC firmada), medium (heurística OK pero no confirmada),
+#             low (heurística débil, FPs probables), unverified (default).
+# Mejora C (dedup): si ya existe (domain_id, type, target, template) en la
+# última hora (ventana de un scan típico), no insertar otra vez.
 db_add_finding() {
   local DOMAIN_ID="$1"
   local TYPE="$2"
@@ -258,8 +300,39 @@ db_add_finding() {
   local TARGET="$4"
   local TEMPLATE="${5:-}"
   local DETAIL="${6:-}"
-  _db "INSERT INTO findings(domain_id,type,severity,target,template,detail,notified)
-       VALUES(${DOMAIN_ID},'${TYPE}','${SEVERITY}','${TARGET}','${TEMPLATE}','${DETAIL//\'/\'\'}',1);"
+  local CONFIDENCE="${7:-unverified}"
+  local TARGET_ESC="${TARGET//\'/\'\'}"
+  local TEMPLATE_ESC="${TEMPLATE//\'/\'\'}"
+
+  if [[ "${FINDING_DEDUP_DISABLED:-0}" != "1" ]]; then
+    local DUP
+    DUP=$(_db "SELECT id FROM findings
+               WHERE domain_id=${DOMAIN_ID} AND type='${TYPE}'
+                 AND target='${TARGET_ESC}' AND template='${TEMPLATE_ESC}'
+                 AND found_at >= datetime('now', '-1 hour')
+               LIMIT 1;")
+    if [[ -n "$DUP" ]]; then
+      # Si la nueva tiene mejor confidence, actualizamos (high > medium > low > unverified)
+      if [[ "$CONFIDENCE" == "high" ]]; then
+        _db "UPDATE findings SET confidence='high', detail='${DETAIL//\'/\'\'}'
+             WHERE id=${DUP} AND confidence != 'high';"
+      fi
+      return
+    fi
+  fi
+
+  _db "INSERT INTO findings(domain_id,type,severity,target,template,detail,confidence,notified)
+       VALUES(${DOMAIN_ID},'${TYPE}','${SEVERITY}','${TARGET_ESC}','${TEMPLATE_ESC}','${DETAIL//\'/\'\'}','${CONFIDENCE}',1);"
+}
+
+# ── Migración: añadir confidence a findings si no existe ─────
+# Sqlite no soporta ALTER TABLE ADD COLUMN IF NOT EXISTS; comprobamos schema.
+db_migrate_findings_confidence() {
+  local HAS_CONFIDENCE
+  HAS_CONFIDENCE=$(_db "SELECT COUNT(*) FROM pragma_table_info('findings') WHERE name='confidence';")
+  if [[ "${HAS_CONFIDENCE:-0}" == "0" ]]; then
+    _db "ALTER TABLE findings ADD COLUMN confidence TEXT DEFAULT 'unverified';"
+  fi
 }
 
 # ── Stats ─────────────────────────────────────────────────────

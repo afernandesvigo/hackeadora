@@ -167,12 +167,16 @@ except Exception:
       SIZE=$(echo "$BODY"   | grep -oP '(?<=###SIZE###)\d+')
       BODY=$(echo "$BODY"   | grep -v '###STATUS###' | grep -v '###SIZE###')
 
+      # Bug #4: 200 + JSON shape (no SPA HTML que devuelve 200 catch-all)
       if [[ "$STATUS" == "200" && "${SIZE:-0}" -gt 100 ]]; then
-        FOUND_PROFILES+=("${APP}-${PROFILE} (${SIZE}B)")
-        # Guardar el más grande para extracción
-        if [[ "${SIZE:-0}" -gt "$BEST_SIZE" ]]; then
-          BEST_SIZE="${SIZE:-0}"
-          BEST_JSON="$BODY"
+        local FIRST_CHAR="${BODY:0:1}"
+        if [[ "$FIRST_CHAR" == "{" || "$FIRST_CHAR" == "[" ]]; then
+          FOUND_PROFILES+=("${APP}-${PROFILE} (${SIZE}B)")
+          # Guardar el más grande para extracción
+          if [[ "${SIZE:-0}" -gt "$BEST_SIZE" ]]; then
+            BEST_SIZE="${SIZE:-0}"
+            BEST_JSON="$BODY"
+          fi
         fi
       fi
     done
@@ -329,6 +333,8 @@ module_run() {
   log_phase "Módulo 30 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"

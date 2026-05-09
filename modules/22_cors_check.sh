@@ -44,7 +44,7 @@ _test_cors_url() {
   local DOMAIN_ID="$2"
   local DOMAIN="$3"
   local ROOT_DOMAIN="$4"
-  local PROXY_FLAG="$5"
+  local PROXY_FLAG="$5"  # ignorado: _h_* auto-inyecta proxy desde globales
 
   local SUBDOMAIN
   SUBDOMAIN=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
@@ -53,11 +53,10 @@ _test_cors_url() {
     [[ -z "$ORIGIN" ]] && continue
 
     local RESPONSE ACAO ACAC ACAM
-    RESPONSE=$(curl -sI --max-time 8 \
+    _h_head "$URL" \
       -H "Origin: ${ORIGIN}" \
-      -H "Access-Control-Request-Method: GET" \
-      ${PROXY_FLAG} \
-      "$URL" 2>/dev/null)
+      -H "Access-Control-Request-Method: GET"
+    RESPONSE="$HTTP_LAST_HEADERS"
 
     ACAO=$(echo "$RESPONSE" | grep -i "Access-Control-Allow-Origin:" | tr -d '\r')
     ACAC=$(echo "$RESPONSE" | grep -i "Access-Control-Allow-Credentials:" | tr -d '\r')
@@ -108,9 +107,8 @@ _test_cors_url() {
       local BODY_CONFIRM=""
       if echo "$ACAC" | grep -qi "true" && [[ "$SEVERITY" == "high" ]]; then
         local BODY_RESP
-        BODY_RESP=$(curl -sk --max-time 8 \
-          -H "Origin: ${ORIGIN}" \
-          ${PROXY_FLAG} "$URL" 2>/dev/null | head -c 2000)
+        _h_get "$URL" -H "Origin: ${ORIGIN}"
+        BODY_RESP="${HTTP_LAST_BODY:0:2000}"
 
         # Detectar tokens en el body (CSRF, session, JWT)
         local TOKEN_FOUND=""

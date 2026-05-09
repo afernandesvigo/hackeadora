@@ -1,95 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
-#  modules/04_nuclei_scan.sh
-#  Fase 4: Nuclei sobre subdominios nuevos (alive)
+#  modules/04_nuclei_scan.sh — STUB NEUTRALIZED 2026-05-09
+#  Manual override: nuclei is deadweight (Bug #14, see project_module_fp_catalog.md).
+#  Original backed up at .04_nuclei_scan.sh.bak_pre_neutralize
 # ============================================================
-# API pública del módulo:
-#   module_run <domain> <domain_id> <output_dir>
-# ============================================================
-
-MODULE_NAME="nuclei_scan"
-MODULE_DESC="Nuclei scan sobre subdominios nuevos"
+MODULE_NAME="nuclei_scan_stub"
+MODULE_DESC="Nuclei scan (NEUTRALIZED — manual skip)"
 
 module_run() {
-  local DOMAIN="$1"
-  local DOMAIN_ID="$2"
-  local OUT_DIR="$3"
-
-  log_phase "Módulo 04 — $MODULE_DESC: $DOMAIN"
-
-  if ! command -v "${NUCLEI_BIN:-nuclei}" &>/dev/null; then
-    log_warn "nuclei no encontrado, saltando"
-    return
-  fi
-
-  # Obtener subdominios alive pendientes de nuclei
-  local PENDING_FILE="$OUT_DIR/.nuclei_pending_subs.txt"
-  db_get_subdomain_nuclei_pending "$DOMAIN_ID" > "$PENDING_FILE"
-
-  if [[ ! -s "$PENDING_FILE" ]]; then
-    log_info "No hay subdominios nuevos para escanear con nuclei"
-    rm -f "$PENDING_FILE"
-    return
-  fi
-
-  local COUNT
-  COUNT=$(wc -l < "$PENDING_FILE" | tr -d ' ')
-  log_info "Lanzando nuclei sobre $COUNT subdominios..."
-
-  # ── Rotador de IPs (opcional) ──────────────────────────────
-  source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
-  if type rotator_enabled &>/dev/null 2>&1 && rotator_enabled && rotator_should_rotate; then
-    log_info "Rotando IP para nuclei scan..."
-  fi
-
-  local NUCLEI_OUT="$OUT_DIR/nuclei_subs_$(date '+%Y%m%d_%H%M%S').json"
-  local SEVERITY="${NUCLEI_SEVERITY:-medium,high,critical}"
-
-  # Preparar lista con https:// prefix
-  sed 's|^|https://|' "$PENDING_FILE" > "$OUT_DIR/.nuclei_targets.txt"
-
-  local THREADS="${NUCLEI_THREADS:-15}"
-  local NUCLEI_TIMEOUT="${NUCLEI_MODULE_TIMEOUT:-900}"  # 15 min max por batch
-
-  timeout "$NUCLEI_TIMEOUT" \
-  "${NUCLEI_BIN:-nuclei}" \
-    -l "$OUT_DIR/.nuclei_targets.txt" \
-    -severity "$SEVERITY" \
-    -json-export "$NUCLEI_OUT" \
-    -c "$THREADS" \
-    -rl 50 \
-    -timeout 10 \
-    -max-host-error 5 \
-    -silent \
-    -no-interactsh \
-    ${NUCLEI_EXTRA_TEMPLATES:+-t "$NUCLEI_EXTRA_TEMPLATES"} \
-    2>/dev/null \
-  || log_warn "nuclei: completado o timeout tras ${NUCLEI_TIMEOUT}s"
-
-  # Procesar resultados JSON
-  if [[ -s "$NUCLEI_OUT" ]] && command -v jq &>/dev/null; then
-    log_info "Procesando findings de nuclei..."
-    while IFS= read -r LINE; do
-      local TEMPLATE SEVERITY_F HOST INFO DETAIL
-      TEMPLATE=$(echo "$LINE"  | jq -r '.["template-id"] // "unknown"')
-      SEVERITY_F=$(echo "$LINE" | jq -r '.info.severity // "unknown"')
-      HOST=$(echo "$LINE"      | jq -r '.host // .["matched-at"] // ""')
-      INFO=$(echo "$LINE"      | jq -r '.info.name // ""')
-      DETAIL=$(echo "$LINE"    | jq -r '.["matched-at"] // .["curl-command"] // ""' | head -c 300)
-
-      [[ -z "$TEMPLATE" || "$TEMPLATE" == "unknown" ]] && continue
-      log_warn "🔴 Nuclei finding [$SEVERITY_F]: $TEMPLATE @ $HOST"
-      notify_nuclei_finding "$DOMAIN" "$TEMPLATE" "$SEVERITY_F" "$HOST" "$DETAIL"
-      db_add_finding "$DOMAIN_ID" "nuclei" "$SEVERITY_F" "$HOST" "$TEMPLATE" "$DETAIL"
-    done < <(jq -c '.[]? // if type=="object" then . else empty end' "$NUCLEI_OUT" 2>/dev/null)
-  fi
-
-  # Marcar subdominios como nuclei_done
-  while IFS= read -r SUB; do
-    [[ -z "$SUB" ]] && continue
-    db_mark_subdomain_nuclei_done "$DOMAIN_ID" "$SUB"
-  done < "$PENDING_FILE"
-
-  rm -f "$PENDING_FILE" "$OUT_DIR/.nuclei_targets.txt"
-  log_ok "$MODULE_DESC completado"
+  log_warn "Módulo 04 nuclei_scan NEUTRALIZADO manualmente — saltando (ver project_module_fp_catalog.md Bug #14)"
+  return 0
 }

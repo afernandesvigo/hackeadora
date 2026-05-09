@@ -365,41 +365,51 @@ _test_path_confusion() {
   )
 
   for PROBE in "${TOMCAT_PROBES[@]}"; do
-    local STATUS LEN BODY
+    local STATUS BODY
     BODY=$(curl -sL --max-time 8 ${CURL_PROXY} \
       -w "\n###STATUS###%{http_code}" \
       "${HOST}${PROBE}" 2>/dev/null)
     STATUS=$(echo "$BODY" | grep -oP '(?<=###STATUS###)\d+' | tail -1)
-    LEN=$(echo "$BODY" | wc -c)
+    BODY="${BODY%$'\n'###STATUS###*}"
 
-    # Positivo: 200 o diferente de 404 baseline en un path que debería no existir
-    # Excluir respuestas WAF conocidas y Bad Request (400 indica path rechazado, no confusión)
-    if [[ "$STATUS" =~ ^(400|418|429|444|406)$ ]]; then continue; fi
+    # Excluir respuestas WAF/rate-limit
+    [[ "$STATUS" =~ ^(400|418|429|444|406|503)$ ]] && continue
+    # Bug #13: solo flagear si el body realmente expone el archivo target.
+    # Status diff (403 vs 404, 401 vs 404) NO es bypass — es comportamiento WAF normal.
+    [[ "$STATUS" != "200" ]] && continue
 
-    if [[ "$STATUS" == "200" || ( "$STATUS" != "404" && "$STATUS" != "$BASELINE_404" && "$STATUS" != "000" ) ]]; then
-      # Filtrar falsos positivos: SPA catch-all y respuestas idénticas al baseline
-      $IS_SPA_CATCHALL && [[ "$STATUS" == "200" ]] && continue
-      local BODY_HEAD
-      BODY_HEAD=$(echo "$BODY" | head -c 50 | tr '[:upper:]' '[:lower:]')
-      echo "$BODY_HEAD" | grep -q "<!doctype html" && continue
-      # Filtrar si tamaño similar al baseline (SPA devuelve siempre el mismo HTML)
-      if [[ "$BASELINE_LEN" -gt 0 && "$STATUS" == "200" ]]; then
-        [[ "$LEN" -le "$((BASELINE_LEN + 200))" && "$LEN" -ge "$((BASELINE_LEN - 200))" ]] && continue
-      fi
-      if [[ "$STATUS" != "200" || "$LEN" -gt 200 ]]; then
-        log_warn "  ⚡ Path confusion (Tomcat ..;/): ${HOST}${PROBE} → HTTP $STATUS"
-        _telegram_send "🔄 *Path Confusion detectada*
+    # Skip catch-all hosts (SPAs sirven 200/HTML para todo)
+    if [[ -n "$IS_SPA_CATCHALL" ]] && $IS_SPA_CATCHALL; then continue; fi
+
+    # Validación de shape del body según target del probe
+    local IS_REAL=false
+    if echo "$PROBE" | grep -q "web.xml"; then
+      _validate_web_xml "$BODY" && IS_REAL=true
+    elif echo "$PROBE" | grep -q "MANIFEST"; then
+      _validate_manifest "$BODY" && IS_REAL=true
+    elif echo "$PROBE" | grep -q "actuator"; then
+      _validate_actuator_response "$BODY" "" && IS_REAL=true
+    elif echo "$PROBE" | grep -qE "/admin|/manager"; then
+      # Admin: body distinto del baseline (>50% diff) y no parece SPA shell
+      local LEN=${#BODY}
+      [[ "$LEN" -gt 200 ]] && \
+        [[ "$BASELINE_LEN" -eq 0 || "$LEN" -gt $((BASELINE_LEN * 3 / 2)) || "$LEN" -lt $((BASELINE_LEN / 2)) ]] && \
+        IS_REAL=true
+    fi
+
+    $IS_REAL || continue
+
+    log_warn "  ⚡ Path confusion (Tomcat ..;/) confirmada: ${HOST}${PROBE}"
+    _telegram_send "🔄 *Path Confusion confirmada (body match)*
 🌐 \`${DOMAIN}\`
 🔗 \`${HOST}${PROBE}\`
 🔧 Técnica: Tomcat ..;/ confusion
 📊 HTTP $STATUS
-⚠️ Posible bypass de filtro de seguridad
+✅ Body verificado: archivo protegido expuesto
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
-        db_add_finding "$DOMAIN_ID" "path_confusion" "high" \
-          "${HOST}${PROBE}" "tomcat_semicolon" "Tomcat ..;/ → HTTP $STATUS"
-        break
-      fi
-    fi
+    db_add_finding "$DOMAIN_ID" "path_confusion" "critical" \
+      "${HOST}${PROBE}" "tomcat_semicolon" "Tomcat ..;/ confirmado — body match en target ${PROBE}"
+    break
   done
 
   # ── 2. Semicolon JAX-RS path parameter injection ─────────────
@@ -531,7 +541,8 @@ _test_idor() {
     if [[ "$TEST_STATUS" == "200" ]] && \
        [[ "$ORIG_STATUS" == "200" ]] && \
        [[ "$TEST_LEN" -gt 100 ]] && \
-       [[ "$TEST_LEN" != "$ORIG_LEN" ]]; then
+       _validate_idor_diff "$ORIG_LEN" "$TEST_LEN" "$ORIG_RESPONSE"; then
+      # Bug #3: pasó threshold dinámico Y baseline no es SPA shell
       log_warn "  ⚡ Posible IDOR: $TEST_URL (len=$TEST_LEN vs orig=$ORIG_LEN)"
       _telegram_send "🎯 *Posible IDOR detectado*
 🌐 \`${DOMAIN}\`
@@ -742,6 +753,10 @@ module_run() {
 
   # Rotador de IPs — ghauri/dalfox usan IP nueva por ejecución
   source "${SCRIPT_DIR}/core/rotator.sh" 2>/dev/null || true
+
+  # Validators compartidos (refactor 2026-05-09)
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
 
   local TOTAL_TESTS=0
   local TOTAL_FINDINGS=0

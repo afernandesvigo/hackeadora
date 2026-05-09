@@ -128,9 +128,11 @@ _test_reset_endpoint() {
   BODY_A=$(cat /tmp/.prp_a_$$ 2>/dev/null | head -c 2000)
   rm -f /tmp/.prp_a_$$
 
+  # Bug #2: técnicas A y B requieren que CANARY se refleje en body.
+  # Status 200/302 sólos generan FPs masivos en endpoints que devuelven 200 a cualquier POST.
   if ! _is_host_error "$BODY_A" "$STATUS_A"; then
-    if _is_reset_response "$BODY_A" || [[ "$STATUS_A" == "200" || "$STATUS_A" == "302" ]]; then
-      VULN=true; VULN_HEADER="Host: ${CANARY}"; VULN_DETAIL="Host header override → posible poison"
+    if _is_reset_response "$BODY_A" && echo "$BODY_A" | grep -qF "$CANARY"; then
+      VULN=true; VULN_HEADER="Host: ${CANARY}"; VULN_DETAIL="Host header override + canary reflejado en body → poison confirmado"
     fi
   fi
 
@@ -146,10 +148,11 @@ _test_reset_endpoint() {
     BODY_B=$(cat /tmp/.prp_b_$$ 2>/dev/null | head -c 2000)
     rm -f /tmp/.prp_b_$$
 
+    # Bug #2: igual que técnica A, exigir reflexión del canary
     if ! _is_host_error "$BODY_B" "$STATUS_B"; then
-      if _is_reset_response "$BODY_B" || [[ "$STATUS_B" == "200" ]]; then
+      if _is_reset_response "$BODY_B" && echo "$BODY_B" | grep -qF "$CANARY"; then
         VULN=true; VULN_HEADER="X-Forwarded-Host: ${CANARY}"
-        VULN_DETAIL="X-Forwarded-Host override → posible poison"
+        VULN_DETAIL="X-Forwarded-Host + canary reflejado en body → poison confirmado"
       fi
     fi
   fi

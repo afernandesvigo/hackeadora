@@ -310,6 +310,13 @@ _test_substring_redirect_bypass() {
   for ENDPOINT in "${TESTED_URLS[@]}"; do
     [[ -z "$ENDPOINT" ]] && continue
 
+    # Smart-skip: si el endpoint base es 404 sin params, no probar 19 variantes
+    local BASE_STATUS
+    BASE_STATUS=$(curl -sk --max-time 5 ${PROXY} -o /dev/null -w "%{http_code}" "$ENDPOINT" 2>/dev/null)
+    if [[ "$BASE_STATUS" == "404" || "$BASE_STATUS" == "000" ]]; then
+      continue
+    fi
+
     # Para cada parámetro de redirect común
     for PARAM in "${REDIRECT_PARAMS[@]}"; do
       local TEST_URL="${ENDPOINT}?${PARAM}=$(python3 -c \
@@ -435,6 +442,36 @@ _scan_authorize_endpoints_db() {
 # ══════════════════════════════════════════════════════════════
 #  Función principal
 # ══════════════════════════════════════════════════════════════
+_oidc_prefilter_candidates() {
+  local DOMAIN_ID="$1" CURL_PROXY="$2" ALL_SUBS="$3"
+  local PARALLEL="${OIDC_PREFILTER_PARALLEL:-16}"
+  local PROBE_TIMEOUT="${OIDC_PROBE_TIMEOUT:-3}"
+
+  local NAME_RE='^(sso|ssopre|login|signin|signon|auth|idp|oauth|oauth2|oidc|cas|gigya|adfs|fed|federation|gio|sts|stsfed|keycloak|kc|account|accounts|connect|secure|access|accesd|api-auth|id|identity|accionistas|partners|portal-sso|cloudsso)\.'
+  export OIDC_NAME_RE="$NAME_RE"
+  export OIDC_PROBE_TIMEOUT="$PROBE_TIMEOUT"
+  export OIDC_CURL_PROXY="$CURL_PROXY"
+
+  echo "$ALL_SUBS" | xargs -I{} -P "$PARALLEL" -n 1 bash -c '
+    SUB="$1"
+    [[ -z "$SUB" ]] && exit 0
+    if [[ "$SUB" =~ $OIDC_NAME_RE ]]; then
+      echo "name|$SUB"
+      exit 0
+    fi
+    TMP=$(mktemp)
+    STATUS=$(curl -sk --max-time "$OIDC_PROBE_TIMEOUT" $OIDC_CURL_PROXY \
+      -o "$TMP" -w "%{http_code}" \
+      "https://${SUB}/.well-known/openid-configuration" 2>/dev/null)
+    if [[ "$STATUS" == "200" ]] && grep -q "\"issuer\"" "$TMP" 2>/dev/null; then
+      echo "discovery|$SUB"
+    fi
+    rm -f "$TMP"
+  ' _ {}
+
+  unset OIDC_NAME_RE OIDC_PROBE_TIMEOUT OIDC_CURL_PROXY
+}
+
 module_run() {
   local DOMAIN="$1"
   local DOMAIN_ID="$2"
@@ -465,13 +502,52 @@ module_run() {
        WHERE domain_id=${DOMAIN_ID} AND status='alive';" 2>/dev/null)
   fi
 
-  local CHECKED=0
+  local TOTAL_ALIVE
+  TOTAL_ALIVE=$(echo "$ALL_SUBS" | grep -c .)
 
-  while IFS= read -r SUB; do
-    [[ -z "$SUB" ]] && continue
+  # ── Pre-filter: solo subs que parecen IdP (nombre o discovery 200+JSON) ──
+  local CANDIDATES_RAW CANDIDATES=()
+  if [[ "${OIDC_FORCE_ALL_SUBS:-0}" == "1" ]]; then
+    log_warn "  OIDC_FORCE_ALL_SUBS=1 — saltando pre-filter (lento)"
+    while IFS= read -r SUB; do
+      [[ -n "$SUB" ]] && CANDIDATES+=("$SUB")
+    done <<< "$ALL_SUBS"
+  else
+    log_info "  Pre-filter sobre $TOTAL_ALIVE subs alive (probe paralelo)..."
+    CANDIDATES_RAW=$(_oidc_prefilter_candidates "$DOMAIN_ID" "$CURL_PROXY" "$ALL_SUBS")
+    while IFS= read -r LINE; do
+      [[ -z "$LINE" ]] && continue
+      local REASON SUB
+      REASON="${LINE%%|*}"
+      SUB="${LINE#*|}"
+      CANDIDATES+=("$SUB")
+      log_info "    [+] candidate ($REASON): $SUB"
+    done <<< "$CANDIDATES_RAW"
+  fi
+
+  local NUM_CANDIDATES="${#CANDIDATES[@]}"
+  log_info "  OIDC pre-filter: ${NUM_CANDIDATES}/${TOTAL_ALIVE} subs son candidatos"
+
+  # ── Cap defensivo ────────────────────────────────────────────
+  local MAX_TARGETS="${OIDC_MAX_TARGETS:-20}"
+  if [[ "$NUM_CANDIDATES" -gt "$MAX_TARGETS" ]]; then
+    log_warn "  cap a OIDC_MAX_TARGETS=$MAX_TARGETS (override con env)"
+    CANDIDATES=("${CANDIDATES[@]:0:$MAX_TARGETS}")
+    NUM_CANDIDATES="$MAX_TARGETS"
+  fi
+
+  if [[ "$NUM_CANDIDATES" -eq 0 ]]; then
+    log_info "  Sin candidatos OIDC — saltando tests (ahorro ~7h vs scan ciego)"
+    rm -f /tmp/.oidc_authorize_urls_${DOMAIN_ID}
+    log_ok "$MODULE_DESC: 0 findings (0/${TOTAL_ALIVE} subs son IdP)"
+    return 0
+  fi
+
+  local CHECKED=0
+  for SUB in "${CANDIDATES[@]}"; do
     ((CHECKED++))
     local BASE="https://${SUB}"
-    log_info "[$CHECKED] OIDC scan: $BASE"
+    log_info "[$CHECKED/$NUM_CANDIDATES] OIDC scan: $BASE"
 
     # 1+4+5+6: OIDC Discovery
     _scan_oidc_discovery "$BASE" "$DOMAIN_ID" "$DOMAIN" "$CURL_PROXY"
@@ -481,8 +557,7 @@ module_run() {
 
     # 2: Host header injection (usa authorize URLs acumulados de discovery)
     _test_host_header_authorize "$BASE" "$DOMAIN_ID" "$DOMAIN" "$CURL_PROXY"
-
-  done <<< "$ALL_SUBS"
+  done
 
   # Scan adicional desde URLs en DB (para authorize sin discovery)
   _scan_authorize_endpoints_db "$DOMAIN_ID" "$DOMAIN" "$CURL_PROXY"
@@ -499,9 +574,9 @@ module_run() {
   [[ "$NEW_FINDINGS" -gt 0 ]] && \
     _telegram_send "🔐 *OIDC/OAuth2 scan completado*
 🌐 \`${DOMAIN}\`
-🔍 Subdominios: \`${CHECKED}\`
+🔍 Candidatos IdP: \`${NUM_CANDIDATES}/${TOTAL_ALIVE}\`
 ⚡ Findings: \`${NEW_FINDINGS}\`
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 
-  log_ok "$MODULE_DESC: $NEW_FINDINGS findings en $CHECKED subdominios"
+  log_ok "$MODULE_DESC: $NEW_FINDINGS findings en $CHECKED candidatos (de $TOTAL_ALIVE alive)"
 }

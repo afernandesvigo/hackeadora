@@ -79,21 +79,26 @@ _ensure_log4j_scan() {
 _cms_finding() {
   local DOMAIN_ID="$1" DOMAIN="$2" TARGET="$3"
   local TYPE="$4" SEVERITY="$5" DETAIL="$6" TEMPLATE="${7:-cms_scan}"
+  local CONFIDENCE="${8:-unverified}"
 
   db_add_finding "$DOMAIN_ID" "cms_scan" "$SEVERITY" \
-    "$TARGET" "$TEMPLATE" "$DETAIL"
+    "$TARGET" "$TEMPLATE" "$DETAIL" "$CONFIDENCE"
 
   local EMOJI="🔴"
   [[ "$SEVERITY" == "medium" ]] && EMOJI="🟠"
   [[ "$SEVERITY" == "low"    ]] && EMOJI="🟡"
 
-  _telegram_send "${EMOJI} *CMS Scan — ${TYPE}*
+  # Solo notificar Telegram si confidence>=high (Mejora B)
+  if [[ "$CONFIDENCE" == "high" ]] || [[ "${TELEGRAM_ALL_FINDINGS:-0}" == "1" ]]; then
+    _telegram_send "${EMOJI} *CMS Scan — ${TYPE}*
 🌐 \`${DOMAIN}\`
 🎯 \`${TARGET}\`
 📋 ${DETAIL:0:300}
+✅ Confidence: ${CONFIDENCE}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
+  fi
 
-  log_warn "  ⚡ [$SEVERITY] $TYPE: $TARGET — $DETAIL"
+  log_warn "  ⚡ [$SEVERITY/$CONFIDENCE] $TYPE: $TARGET — $DETAIL"
 }
 
 # ── Obtener subdominios con una tecnología concreta ───────────
@@ -453,12 +458,19 @@ _scan_aem() {
     local BASE="https://${SUB}"
     local IS_AEM=false
 
-    # Detectar AEM por paths característicos
+    # Skip catch-all hosts upfront (Bug #1: SPA shells fingen ser AEM)
+    if is_catchall_host "$BASE" 2>/dev/null; then
+      log_info "  Skip AEM scan: $BASE → catch-all host"
+      continue
+    fi
+
+    # Detectar AEM por paths característicos + body validation
+    # _noredirect: Bug #9 — un 30x con -L falsifica 200 sobre SPA catch-all/redirect
+    # _validate_aem_exposed: Bug #1 — exigir marcadores reales de AEM en body
     for AEM_PATH in "/libs/granite/core/content/login.html" "/crx/de/index.jsp"; do
-      local STATUS
-      STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-        -o /dev/null -w "%{http_code}" "${BASE}${AEM_PATH}" 2>/dev/null)
-      if [[ "$STATUS" == "200" || "$STATUS" == "302" ]]; then
+      _h_get_noredirect "${BASE}${AEM_PATH}" --connect-timeout 8
+      local STATUS="$HTTP_LAST_STATUS"
+      if [[ "$STATUS" == "200" || "$STATUS" == "302" ]] && _validate_aem_exposed; then
         IS_AEM=true
         log_warn "  ⚡ AEM detectado: $BASE"
         break
@@ -467,23 +479,23 @@ _scan_aem() {
 
     $IS_AEM || continue
 
-    # Comprobar paths críticos
+    # Comprobar paths críticos (noredirect: Bug #9 + body shape: Bug #1)
     for AEM_PATH in "${AEM_PATHS[@]}"; do
-      local STATUS RESP
-      STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-        -o /tmp/.aem_resp_$$ -w "%{http_code}" "${BASE}${AEM_PATH}" 2>/dev/null)
+      _h_get_noredirect "${BASE}${AEM_PATH}" --connect-timeout 8
+      local STATUS="$HTTP_LAST_STATUS"
 
-      if [[ "$STATUS" == "200" ]]; then
+      # 200 + body con marcadores AEM (no solo SPA shell) → confidence=high
+      if [[ "$STATUS" == "200" ]] && _validate_aem_exposed; then
         local SEVERITY="medium"
         [[ "$AEM_PATH" == *"crx/de"* || "$AEM_PATH" == *"console"* ]] && SEVERITY="critical"
         [[ "$AEM_PATH" == *"passwd"* ]] && SEVERITY="critical"
 
         _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${AEM_PATH}" \
           "AEM Exposed Endpoint" "$SEVERITY" \
-          "Endpoint AEM accesible: ${AEM_PATH}" "aem_check"
+          "Endpoint AEM accesible: ${AEM_PATH} — body validado con marcadores AEM" \
+          "aem_check" "high"
       fi
     done
-    rm -f /tmp/.aem_resp_$$
 
     # aem-hacker si está disponible
     if _ensure_aem_hacker 2>/dev/null; then
@@ -529,10 +541,9 @@ _scan_liferay() {
     local BASE="https://${SUB}"
     log_info "  Liferay scan → $BASE"
 
-    # JSONWS API — enumerar métodos disponibles
+    # JSONWS API — enumerar métodos disponibles (noredirect: ver Bug #9)
     local JSONWS_STATUS
-    JSONWS_STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-      -o /dev/null -w "%{http_code}" "${BASE}/api/jsonws" 2>/dev/null)
+    JSONWS_STATUS=$(_h_status_noredirect "${BASE}/api/jsonws" --connect-timeout 8)
 
     if [[ "$JSONWS_STATUS" == "200" ]]; then
       _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/api/jsonws" \
@@ -583,11 +594,10 @@ _scan_sap() {
     local BASE="https://${SUB}"
     log_info "  SAP NetWeaver scan → $BASE"
 
-    # Comprobar endpoints SAP críticos
+    # Comprobar endpoints SAP críticos (noredirect: ver Bug #9)
     for SAP_PATH in "${SAP_PATHS[@]}"; do
       local STATUS
-      STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-        -o /dev/null -w "%{http_code}" "${BASE}${SAP_PATH}" 2>/dev/null)
+      STATUS=$(_h_status_noredirect "${BASE}${SAP_PATH}" --connect-timeout 8)
 
       if [[ "$STATUS" == "200" || "$STATUS" == "401" || "$STATUS" == "403" ]]; then
         local SEVERITY="medium"
@@ -707,16 +717,23 @@ _scan_spring() {
     local BASE="https://${SUB}"
     log_info "  Spring Boot actuator → $BASE"
 
+    # Skip catch-all (Bug #4: SPA devuelve 200 para todos los /actuator/*)
+    if is_catchall_host "$BASE" 2>/dev/null; then
+      log_info "  Skip Spring Actuator: $BASE → catch-all host"
+      continue
+    fi
+
+    # Spring Actuator probes — noredirect (Bug #9) + body shape (Bug #4) → confidence=high
     for ACT_PATH in "${ACTUATOR_PATHS[@]}"; do
-      local STATUS
-      STATUS=$(curl -sL --max-time 8 ${CURL_PROXY} \
-        -o /dev/null -w "%{http_code}" "${BASE}${ACT_PATH}" 2>/dev/null)
-      if [[ "$STATUS" == "200" ]]; then
+      _h_get_noredirect "${BASE}${ACT_PATH}" --connect-timeout 8
+      local STATUS="$HTTP_LAST_STATUS"
+      if [[ "$STATUS" == "200" ]] && _validate_actuator_response; then
         local SEVERITY="medium"
         [[ "$ACT_PATH" == *"heapdump"* || "$ACT_PATH" == *"env"* ]] && SEVERITY="high"
         _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}${ACT_PATH}" \
           "Spring Boot Actuator Exposed" "$SEVERITY" \
-          "Actuator endpoint accesible: ${ACT_PATH}" "spring_actuator"
+          "Actuator endpoint accesible: ${ACT_PATH} — JSON shape validada" \
+          "spring_actuator" "high"
       fi
     done
 
@@ -1578,12 +1595,13 @@ _scan_hippo() {
     fi
 
     # ── /cms/login (login form directo) ───────────────────────
+    # noredirect: Bug #1b/Bug #9 — un 30x con -L falsifica 200 (FP en sge.repsol.com)
     local LOGIN_STATUS LOGIN_BODY
-    LOGIN_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 ${CURL_PROXY} \
-      -o /tmp/.hippo_login_$$ -w "%{http_code}" -L "${BASE}/cms/login" 2>/dev/null)
-    LOGIN_BODY=$(cat /tmp/.hippo_login_$$ 2>/dev/null | head -c 2000)
+    _h_get_noredirect "${BASE}/cms/login" --connect-timeout 8 -A "${SCAN_UA:-Mozilla/5.0}"
+    LOGIN_STATUS="$HTTP_LAST_STATUS"
+    LOGIN_BODY="${HTTP_LAST_BODY:0:2000}"
     if [[ "$LOGIN_STATUS" == "200" ]]; then
-      if echo "$LOGIN_BODY" | grep -qi "hippo\|bloomreach\|wicket\|login.*cms\|cms.*login"; then
+      if echo "$LOGIN_BODY" | grep -qi "hippo\|bloomreach\|wicket"; then
         _cms_finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/cms/login" \
           "Hippo CMS Login Page Exposed" "medium" \
           "Página de login del CMS accesible — verificar si panel /cms/ también es accesible" "hippo_login"
@@ -1843,6 +1861,9 @@ module_run() {
   local OUT_DIR="$3"
 
   log_phase "Módulo 25 — $MODULE_DESC: $DOMAIN"
+
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
 
   # Obtener resumen de tecnologías detectadas
   local TECHS_FOUND

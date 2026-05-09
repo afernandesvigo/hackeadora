@@ -428,6 +428,12 @@ _test_role_entity() {
 
     [[ "$HTTP_STATUS" != "200" ]] && continue
 
+    # Bug #8: skip OAuth/OIDC/SAML authorization endpoints. /as/authorize,
+    # /oauth2/authorize, etc. son flows OAuth, NO admin endpoints sin auth.
+    if type is_oauth_authorize_path &>/dev/null && is_oauth_authorize_path "$URL"; then
+      continue
+    fi
+
     # Si el redirect salió del dominio target, es FP (e.g. duckling → github.com)
     local TARGET_DOMAIN
     TARGET_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+' | sed 's/^www\.//')
@@ -1056,6 +1062,8 @@ module_run() {
   local OUT_DIR="$3"
 
   log_phase "Módulo 21 — $MODULE_DESC: $DOMAIN"
+
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
 
   # Detect single-target mode for scoping
   local ALIVE_FILE="$OUT_DIR/subs_alive.txt"

@@ -138,6 +138,13 @@ _test_race_endpoint() {
   local COOKIE="${7:-}"
   local N_WORKERS="${RACE_WORKERS:-15}"
 
+  # Bug #11: skip endpoints idempotentes (GET/HEAD, SAML/OAuth, /health, etc.)
+  # Solo POST/PUT/PATCH/DELETE pueden tener race real con estado mutable.
+  if type is_idempotent_endpoint &>/dev/null && is_idempotent_endpoint "$METHOD" "$URL"; then
+    log_info "  Skipping race test — $METHOD $URL es idempotente (GET/SAML/OAuth/health)"
+    return 1
+  fi
+
   # Pre-check: si el endpoint redirige fuera del dominio, skip (FP por redirect a GitHub, etc.)
   local URL_DOMAIN EFF_URL
   URL_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+')
@@ -241,6 +248,7 @@ module_run() {
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
