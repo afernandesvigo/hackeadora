@@ -22,6 +22,9 @@ blindxss/
 # Bases de datos locales
 *.db
 
+# KB updater backups
+core/knowledge_base.bak.json
+
 # Findings / reports (solo en servidor)
 hopgoblin_*.txt
 *_report.md

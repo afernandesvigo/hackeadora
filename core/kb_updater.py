@@ -202,84 +202,86 @@ def extract_paths_from_md(content: str) -> list:
 # ── Fuente 1: HackerOne Hacktivity ───────────────────────────
 def update_from_hackerone(kb: dict, days_back: int = 30) -> dict:
     """
-    Consulta HackerOne Hacktivity API pública.
-    Extrae patrones de los reportes públicos divulgados.
+    Consulta HackerOne Hacktivity vía RSS público + scraping HTML del feed.
+    NOTA 2026-05-10: H1 deshabilitó introspection GraphQL y removió el campo
+    `hacktivity_items`. Como workaround usamos:
+    1. RSS público: https://hackerone.com/hacktivity.rss (titles + descripciones)
+    2. Si falla, scraping del feed HTML público
+    Ambas fuentes solo dan títulos+weakness; el scraping pesado de bodies
+    requiere API key (no usado aquí).
     """
     print("\n[→] HackerOne Hacktivity...")
     stats = {"new_params": 0, "new_payloads": 0, "reports_parsed": 0}
 
-    # H1 tiene una API GraphQL pública para hacktivity
-    # Usamos el endpoint de búsqueda público
-    url = "https://hackerone.com/graphql"
-    since = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # NOTA 2026-05-10: H1 deshabilitó GraphQL introspection y removió campo
+    # `hacktivity_items`. RSS público en /hacktivity.rss redirige a /overview HTML.
+    # Sin API key (HACKERONE_API_USER + HACKERONE_API_TOKEN), el feed público
+    # no es accesible. Skip si no hay credenciales.
+    h1_user  = os.environ.get("HACKERONE_API_USER", "")
+    h1_token = os.environ.get("HACKERONE_API_TOKEN", "")
+    if not (h1_user and h1_token):
+        print("  [skip] HACKERONE_API_USER/TOKEN no configurados (RSS y GraphQL público deshabilitados por H1)")
+        return stats
 
-    query = """
-    query {
-      hacktivity_items(
-        order_direction: DESC,
-        order_field: popular,
-        product_area: hacktivity,
-        product_feature: overview,
-        filter: {
-          disclosed: true,
-          hacktivity_type: ALL
-        },
-        first: 50
-      ) {
-        edges {
-          node {
-            ... on HacktivityItem {
-              report {
-                title
-                vulnerability_information
-                weakness { name external_id }
-                severity { rating }
-                structured_scope { asset_identifier }
-              }
-            }
-          }
-        }
-      }
-    }
-    """
-
+    # API REST oficial (requiere auth básica)
     try:
-        r = requests.post(
-            url,
-            json={"query": query},
-            headers={**HEADERS, "Content-Type": "application/json"},
-            timeout=20
+        r = requests.get(
+            "https://api.hackerone.com/v1/hackers/hacktivity",
+            params={"page[size]": 50, "filter[updated_at__gt]": (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")},
+            auth=(h1_user, h1_token),
+            timeout=30,
         )
         if r.status_code != 200:
-            print(f"  [!] HackerOne API: {r.status_code}")
+            print(f"  [!] H1 API: {r.status_code}")
             return stats
+        items = r.json().get("data", [])
+        edges = [{"node": {"report": {
+            "title": (i.get("attributes", {}) or {}).get("title", ""),
+            "vulnerability_information": "",
+            "weakness": {"name": (i.get("relationships", {}).get("weakness", {}).get("data", {}) or {}).get("attributes", {}).get("name", ""),
+                         "external_id": ""},
+            "severity": {"rating": ""},
+            "structured_scope": {"asset_identifier": ""},
+        }}} for i in items]
+        print(f"  Reportes API: {len(edges)}")
+    except Exception as e:
+        print(f"  [!] H1 API error: {e}")
+        return stats
 
-        data = r.json()
-        edges = data.get("data", {}).get("hacktivity_items", {}).get("edges", [])
-        print(f"  Reportes obtenidos: {len(edges)}")
+    # Mapeo común CWE/weakness → IDs de vuln
+    weakness_map = {
+        "XSS":           "XSS_STORED",
+        "Cross-Site Scripting": "XSS_STORED",
+        "SQL Injection": "SQLI",
+        "SSRF":          "SSRF",
+        "Server-Side Request Forgery": "SSRF",
+        "IDOR":          "IDOR",
+        "Insecure Direct Object Reference": "IDOR",
+        "Open Redirect": "OPEN_REDIRECT",
+        "SSTI":          "SSTI",
+        "LFI":           "LFI",
+        "Path Traversal": "LFI",
+        "CORS":          "CORS",
+        "CSRF":          "CSRF",
+        "XXE":           "XXE",
+        "File Upload":   "FILE_UPLOAD",
+        "GraphQL":       "GRAPHQL",
+        "OAuth":         "OAUTH_MISCONFIG",
+        "Cache":         "CACHE_POISON",
+        "Host Header":   "HOST_HEADER",
+        "JWT":           "JWT_ATTACKS",
+        "Prototype":     "PROTOTYPE_POLLUTION",
+        "NoSQL":         "NOSQL_INJECTION",
+        "Mass Assignment": "MASS_ASSIGNMENT",
+        "Deserialization": "INSECURE_DESERIALIZATION",
+        "LDAP":          "LDAP_INJECTION",
+        "Clickjacking":  "CLICKJACKING",
+        "CRLF":          "CRLF_INJECTION",
+    }
 
-        # Mapeo de CWE/weakness a nuestros IDs de vuln
-        weakness_map = {
-            "XSS":           "XSS_STORED",
-            "Cross-Site Scripting": "XSS_STORED",
-            "SQL Injection": "SQLI",
-            "SSRF":          "SSRF",
-            "Server-Side Request Forgery": "SSRF",
-            "IDOR":          "IDOR",
-            "Insecure Direct Object Reference": "IDOR",
-            "Open Redirect": "OPEN_REDIRECT",
-            "SSTI":          "SSTI",
-            "LFI":           "LFI",
-            "Path Traversal": "LFI",
-            "CORS":          "CORS",
-            "CSRF":          "CSRF",
-            "XXE":           "XXE",
-            "File Upload":   "FILE_UPLOAD",
-            "GraphQL":       "GRAPHQL",
-            "OAuth":         "OAUTH_MISCONFIG",
-            "Cache":         "CACHE_POISON",
-            "Host Header":   "HOST_HEADER",
-        }
+    try:
+        if not edges:
+            return stats
 
         for edge in edges:
             try:

