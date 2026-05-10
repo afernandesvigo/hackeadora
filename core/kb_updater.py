@@ -227,14 +227,27 @@ def update_from_hackerone(kb: dict, days_back: int = 30) -> dict:
     try:
         r = requests.get(
             "https://api.hackerone.com/v1/hackers/hacktivity",
-            params={"page[size]": 50, "filter[updated_at__gt]": (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")},
+            params={
+                "page[size]": 100,
+                "filter[disclosed]": "true",
+                # NOTA: H1 API rechaza sort=-disclosed_at con 500. Sin sort.
+            },
             auth=(h1_user, h1_token),
             timeout=30,
         )
         if r.status_code != 200:
             print(f"  [!] H1 API: {r.status_code}")
             return stats
-        items = r.json().get("data", [])
+        # Filtrar por updated_at en cliente (la API ignora filter[updated_at__gt])
+        cutoff = (datetime.now() - timedelta(days=days_back))
+        all_items = r.json().get("data", [])
+        items = [
+            i for i in all_items
+            if i.get("attributes", {}).get("disclosed_at")
+            and datetime.fromisoformat(
+                i["attributes"]["disclosed_at"].replace("Z", "+00:00")
+            ).replace(tzinfo=None) > cutoff
+        ]
         edges = [{"node": {"report": {
             "title": (i.get("attributes", {}) or {}).get("title", ""),
             "vulnerability_information": "",
