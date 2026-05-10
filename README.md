@@ -30,7 +30,7 @@ Tras un scan piloto encontró ~71% FPs en findings critical/high, se aplicó ref
 - **Dedup** por `(domain, type, target, template)` con upsert si nueva confidence es mejor.
 - **Caché on-disk** de `is_catchall_host` por scan (`${OUT_DIR}/.catchall_cache.txt`).
 - **Mod 99 verify post-pipeline**: re-valida critical/high con confidence baja → downgrade automático si falla validator estricto.
-- **OOB confirmation** vía `a.fernandes.es` (configurable, dominio canary) para OAuth redirect, JWT jku, SSRF, SAML XSLT.
+- **OOB confirmation** vía `a.dominio.es` (configurable, dominio canary) para OAuth redirect, JWT jku, SSRF, SAML XSLT.
 
 ---
 
@@ -139,7 +139,7 @@ Cada entry: `name`, `category`, `header_re`, `body_re`, `url_probes`, `url_statu
 |---|--------|
 | **47** | SSRF deep (cloud metadata AWS/GCP/Azure + protocol smuggling + OOB `SSRF_CANARY`) |
 | **48** | NoSQL injection (`$ne`, `$gt`, form-encoded, regex blind) |
-| **49** | OAuth deep (redirect_uri parsing diff con `OAUTH_CANARY_DOMAIN=a.fernandes.es` + verificación nginx logs, state CSRF, scope escalation, dynamic registration) |
+| **49** | OAuth deep (redirect_uri parsing diff con `OAUTH_CANARY_DOMAIN=a.dominio.es` + verificación nginx logs, state CSRF, scope escalation, dynamic registration) |
 | **50** | File upload bypass (extension/content-type/SVG XSS + canary roundtrip) |
 | **51** | Insecure deserialization (Java rO0AB, ASP.NET ViewState, Ruby Marshal, Python pickle) |
 | **52** | SSTI per-engine (Jinja2, Twig, Freemarker, Velocity, Handlebars, Pebble) |
@@ -217,7 +217,7 @@ WHERE domain_id=(SELECT id FROM domains WHERE domain='target.com');
 `data/scopes/<programa>_excludes.txt` — patrones de findings out-of-scope (e.g. mobile-only, conocidos duplicados).
 
 ```bash
-PRESEED_SUBS_ALIVE=data/scopes/generali.txt ./recon.sh generali.fr --skip-modules=01
+PRESEED_SUBS_ALIVE=data/scopes/empresa.txt ./recon.sh empresa.com --skip-modules=01
 ```
 
 ---
@@ -308,7 +308,7 @@ WPSCAN_API_TOKEN=
 NVD_API_KEY=
 
 # Canaries opt-in (defaults sensatos)
-OAUTH_CANARY_DOMAIN=a.fernandes.es        # default; tu dominio si lo controlas
+OAUTH_CANARY_DOMAIN=a.dominio.es        # default; tu dominio si lo controlas
 OAUTH_CANARY_LOG_PATH=/var/log/nginx/access.log
 SSRF_CANARY=                              # opt-in para mod 47
 JWT_CANARY=                               # opt-in para mod 45
