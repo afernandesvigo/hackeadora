@@ -856,12 +856,21 @@ module_run() {
         SSTI)          echo "SSTI|${URL}|${PARAM}"            >> "$CURL_TESTS" ;;
         LFI)           echo "LFI|${URL}|${PARAM}"             >> "$CURL_TESTS" ;;
         SQLI)
+          # Bug #16: skip URLs sintéticas (.vue/.tsx/etc + framework keywords) y catch-all hosts
+          is_synthetic_endpoint "$URL" "$PARAM" 2>/dev/null && continue
+          local _SQLI_HOST
+          _SQLI_HOST=$(echo "$URL" | grep -oP 'https?://[^/?#]+')
+          is_catchall_host "$_SQLI_HOST" 2>/dev/null && continue
           if command -v ghauri &>/dev/null; then
             echo "${URL}|${PARAM}" >> "$GHAURI_TESTS"
           else
             _add_nuclei_target "${TAGS:-sqli}" "$URL" "$NUCLEI_DIR"
           fi ;;
         XSS_STORED)
+          is_synthetic_endpoint "$URL" "$PARAM" 2>/dev/null && continue
+          local _XSS_HOST
+          _XSS_HOST=$(echo "$URL" | grep -oP 'https?://[^/?#]+')
+          is_catchall_host "$_XSS_HOST" 2>/dev/null && continue
           if command -v dalfox &>/dev/null; then
             echo "${URL}|${PARAM}" >> "$DALFOX_TESTS"
           else

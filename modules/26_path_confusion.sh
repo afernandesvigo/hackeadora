@@ -355,9 +355,11 @@ _test_apache_confusion() {
   log_info "  [Apache Confusion Attacks BH2024] $BASE"
 
   # Nuclei con todos los CVEs de Orange Tsai 2024
+  # severity en origen: solo medium/high/critical (descarta apache-detect etc.)
   if command -v nuclei &>/dev/null; then
     nuclei -u "$BASE" \
       -tags "apache,cve-2024-38475,cve-2024-38476,cve-2024-38477,cve-2024-38473,cve-2024-38474,cve-2024-39573" \
+      -severity medium,high,critical \
       -silent -jsonl 2>/dev/null | \
       while IFS= read -r LINE; do
         [[ -z "$LINE" ]] && continue
@@ -365,6 +367,8 @@ _test_apache_confusion() {
         TPL=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
         SEV=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','medium'))" 2>/dev/null)
         HOST=$(echo "$LINE"| python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('matched-at',d.get('host','?')))" 2>/dev/null)
+        # Filtro de templates fingerprint/detect (Apache-detect, tech-detect, etc.)
+        is_nuclei_finding_actionable "$TPL" "$SEV" || continue
         _finding "$DOMAIN_ID" "$DOMAIN" "$HOST" \
           "Apache Confusion (Orange Tsai BH2024)" "$SEV" \
           "CVE $TPL — Confusion Attack" "nuclei:$TPL"

@@ -187,34 +187,64 @@ is_catchall_host() {
     fi
   fi
 
-  # Probe: path random largo + segmento /admin random
-  local RAND
-  RAND=$(openssl rand -hex 6 2>/dev/null || echo "${RANDOM}${RANDOM}")
-  local PROBE_URL="${KEY}/HACKEADORA_NX_${RAND}_$(date +%s)"
-
   if ! type _h_get &>/dev/null; then
     # No hay http_analyzer disponible → no podemos probar, asumir no-catchall
     _CATCHALL_HOST_CACHE[$KEY]="no"
     return 1
   fi
 
-  _h_get "$PROBE_URL" --connect-timeout 5
-  local PROBE_STATUS="$HTTP_LAST_STATUS"
-  local PROBE_BODY="$HTTP_LAST_BODY"
-  local PROBE_LEN=${#PROBE_BODY}
+  # Estrategia 2-probe (fix 2026-05-09):
+  # Probar DOS paths random distintos y comparar bodies. Solo es catch-all si
+  # ambos devuelven 200 + body >500B + lengths similares (diff <5% o <100B).
+  # Casos que distingue:
+  #   - SPA Vue/React (aassethealth): 200 13KB idéntico × 2 → catch-all
+  #   - AEM auth gate (prod-author): 401 0B × 2 → NO catch-all (escanear)
+  #   - Auth gate variable: 200 13KB vs 401 16B → NO catch-all (escanear)
+  local RAND1 RAND2
+  RAND1=$(openssl rand -hex 6 2>/dev/null || echo "${RANDOM}${RANDOM}")
+  RAND2=$(openssl rand -hex 6 2>/dev/null || echo "${RANDOM}${RANDOM}")
+  local PROBE1_URL="${KEY}/HACKEADORA_NX_${RAND1}_$(date +%s)"
+  local PROBE2_URL="${KEY}/api/v1/HACKEADORA_${RAND2}/$(date +%s)"
+
+  _h_get "$PROBE1_URL" --connect-timeout 5
+  local STATUS1="$HTTP_LAST_STATUS"
+  local LEN1=${#HTTP_LAST_BODY}
+  local HEADERS1="$HTTP_LAST_HEADERS"
 
   local RESULT="no"
-  # 200 con body >500B → casi siempre catch-all
-  if [[ "$PROBE_STATUS" == "200" ]] && [[ "$PROBE_LEN" -gt 500 ]]; then
-    RESULT="yes"
-  # 302 con Location no-relativa al path probado → catch-all redirect
-  elif [[ "$PROBE_STATUS" =~ ^30[127]$ ]]; then
+
+  # Si probe1 NO es 200 con body sustancial → ya sabemos que no es catch-all simple
+  # Edge case: redirect 302/301 con Location consistente → catch-all redirect
+  if [[ "$STATUS1" =~ ^30[127]$ ]]; then
     local LOC
-    LOC=$(echo "$HTTP_LAST_HEADERS" | grep -i '^location:' | head -1 | tr -d '\r')
-    # Si Location apunta al mismo path probado → no catch-all (404 redirect normal)
-    # Si apunta a otra URL completa → posible catch-all
-    if [[ -n "$LOC" ]] && ! echo "$LOC" | grep -qF "$PROBE_URL"; then
+    LOC=$(echo "$HEADERS1" | grep -i '^location:' | head -1 | tr -d '\r')
+    if [[ -n "$LOC" ]] && ! echo "$LOC" | grep -qF "$PROBE1_URL"; then
       RESULT="yes"
+    fi
+  elif [[ "$STATUS1" == "200" ]] && [[ "$LEN1" -gt 500 ]]; then
+    # Probe 2 (path completamente distinto)
+    _h_get "$PROBE2_URL" --connect-timeout 5
+    local STATUS2="$HTTP_LAST_STATUS"
+    local LEN2=${#HTTP_LAST_BODY}
+
+    if [[ "$STATUS2" == "200" ]] && [[ "$LEN2" -gt 500 ]]; then
+      # Ambos 200 con body sustancial. Verificar que lengths sean similares.
+      local DIFF=$(( LEN1 - LEN2 ))
+      [[ "$DIFF" -lt 0 ]] && DIFF=$(( -DIFF ))
+      local THRESHOLD=$(( LEN1 / 20 ))
+      [[ "$THRESHOLD" -lt 100 ]] && THRESHOLD=100
+      if [[ "$DIFF" -lt "$THRESHOLD" ]]; then
+        # Edge case (refactor 2026-05-09): si el body de catch-all contiene
+        # markers de framework empresarial (AEM, Sharepoint, Drupal admin,
+        # Magento, Hippo, "POST data" de AEM author), NO marcar como catch-all
+        # — es un auth gate real que merece scaneo (validators filtrarán FPs).
+        if echo "$HTTP_LAST_BODY" | grep -qiE \
+          'AEM Sign In|Apache Sling|granite\.author|cq:Page|cq:template|<title>POST data|sharepoint|drupal\.behaviors|Magento_|magentoStorefrontEvents|bloomreach|<title>Hippo|hippo:|/libs/granite|/etc/clientlibs'; then
+          RESULT="no"
+        else
+          RESULT="yes"
+        fi
+      fi
     fi
   fi
 
@@ -280,4 +310,110 @@ is_salesforce_lightning_body() {
   echo "$BODY" | grep -qE 'Aura\.Component|salesforce\.com|lightning/|aura:|/auraFW/|/sfdcjs/|sforce\.one|app\.aura\.framework' \
     && return 0
   return 1
+}
+
+# ────────────────────────────────────────────────────────────
+#  has_pii_shape — body contiene patrones de PII (auth bypass / IDOR confirm)
+# ────────────────────────────────────────────────────────────
+# Tier 2.3 — usado por mod 41 (auth replay) para confirmar que un response
+# realmente expone datos de usuario antes de flagear como auth bypass.
+#
+# Devuelve 0 (true) si body tiene markers PII fuertes (email, phone, SSN, etc.).
+has_pii_shape() {
+  local BODY="${1:-$HTTP_LAST_BODY}"
+  [[ -z "$BODY" ]] && return 1
+
+  # Email real (no @example.com / @placeholder)
+  if echo "$BODY" | grep -qE '"[a-zA-Z0-9_]+":\s*"[a-zA-Z0-9._+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}"'; then
+    if ! echo "$BODY" | grep -qiE '@(example|test|placeholder|invalid|domain)\.'; then
+      return 0
+    fi
+  fi
+  # Phone con formato válido E.164 o nacional (no 555-555-555)
+  if echo "$BODY" | grep -qE '"(phone|mobile|tel|telephone|telefono|telefon)":\s*"\+?[0-9]{6,15}"'; then
+    return 0
+  fi
+  # SSN/DNI/CIF
+  if echo "$BODY" | grep -qE '"(ssn|nationalId|dni|cif|nie|tax_id|taxId)":\s*"[0-9A-Z]{6,15}"'; then
+    return 0
+  fi
+  # Birth date
+  if echo "$BODY" | grep -qE '"(birthDate|birthdate|dob|dateOfBirth|fechaNacimiento)":\s*"[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+    return 0
+  fi
+  # Address con calle real
+  if echo "$BODY" | grep -qE '"(street|address|addressLine|direccion|ulica)":\s*"[^"]{8,}"'; then
+    if ! echo "$BODY" | grep -qiE '"(street|address)":\s*"(test|none|n/a|null|placeholder)"'; then
+      return 0
+    fi
+  fi
+  # Credit card / IBAN
+  if echo "$BODY" | grep -qE '"(ccNumber|cardNumber|iban|account_number)":\s*"[A-Z0-9]{8,}"'; then
+    return 0
+  fi
+  # JWT en body
+  if echo "$BODY" | grep -qE '"(token|accessToken|refreshToken|sessionToken)":\s*"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.'; then
+    return 0
+  fi
+
+  return 1
+}
+
+# ────────────────────────────────────────────────────────────
+#  is_synthetic_endpoint — descartar URLs sintéticas extraídas del JS
+# ────────────────────────────────────────────────────────────
+# Bug #16 (refactor 2026-05-09): el JS analyzer extrae "endpoints" de archivos
+# fuente Vue/Svelte/JSX. Esos no son endpoints reales — son rutas de componentes
+# con keywords del framework como ?scoped, ?type, ?vue, ?props que NO son query
+# params. dalfox/ghauri sobre estos URLs producen 0 findings históricos.
+#
+# Devuelve 0 (true) si la URL/param pinta como sintético — el caller debe skip.
+#
+# Uso:
+#   is_synthetic_endpoint "$URL" "$PARAM" && continue
+is_synthetic_endpoint() {
+  local URL="$1" PARAM="${2:-}"
+  [[ -z "$URL" ]] && return 1
+
+  # Path con extensión de archivo fuente de framework → NO es endpoint real
+  echo "$URL" | grep -qiE '\.(vue|svelte|tsx|jsx|module\.(ts|js)|d\.ts)([?#]|$)' && return 0
+
+  # Param name = keyword del compilador framework (Vue/React/Svelte)
+  if [[ -n "$PARAM" ]]; then
+    case "$PARAM" in
+      scoped|inheritAttrs|setup|props|emits|slots|render|template|methods|\
+computed|watched|watch|mounted|created|beforeMount|destroyed|unmounted|\
+provide|inject|directives|filters|mixins|extends|inheritOptions|key|ref|\
+is|component|transition|teleport|suspense|portal|app|layout|page|nuxt|\
+__namespace|__webpack|__esModule|__vite|hmr|hot|module|exports)
+        return 0 ;;
+    esac
+  fi
+
+  return 1
+}
+
+# ────────────────────────────────────────────────────────────
+#  is_nuclei_finding_actionable — filtrar fingerprinting templates
+# ────────────────────────────────────────────────────────────
+# Refactor 2026-05-09: las integraciones nuclei en mods 25/26 acepta CUALQUIER
+# template con su tag, incluyendo `apache-detect`, `tech-detect`, etc., que
+# son fingerprinting (severity=info), NO vulnerabilidades. Genera ruido.
+#
+# Devuelve 0 si el finding nuclei merece reportarse:
+#   - severity != info (excluye plantillas de info-disclosure noise)
+#   - template-id NO contiene 'detect'/'fingerprint'/'tech' a no ser que sea cve-*
+#
+# Uso:
+#   is_nuclei_finding_actionable "$TEMPLATE_ID" "$SEVERITY" || continue
+is_nuclei_finding_actionable() {
+  local TPL="$1" SEV="$2"
+  [[ -z "$TPL" || "$TPL" == "?" ]] && return 1
+  [[ "$SEV" == "info" ]] && return 1
+  # CVE templates siempre actionable (ya pasan severity check)
+  echo "$TPL" | grep -qE '^cve-[0-9]{4}' && return 0
+  # Excluir fingerprinting / detection
+  echo "$TPL" | grep -qiE '(^|-)(detect|fingerprint|tech|version)(-|$)' && return 1
+  # Por defecto, aceptable si severity >= medium
+  return 0
 }

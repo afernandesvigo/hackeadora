@@ -114,6 +114,22 @@ def get_technologies(domain_id: int) -> list:
         except Exception:
             return []
 
+def get_host_stack(domain_id: int) -> list:
+    """Stack consolidado por subdomain alive — clave para que el modelo razone
+    sobre cada host como una unidad (e.g. "este host es AEM + Apache + Akamai
+    detrás de PingFederate") en vez de techs sueltas."""
+    with db_conn() as conn:
+        try:
+            rows = conn.execute(
+                """SELECT subdomain, techs, categories
+                   FROM host_stack WHERE domain_id=? AND techs IS NOT NULL
+                   ORDER BY subdomain""",
+                (domain_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
 def get_juicy_params(domain_id: int) -> list:
     """Parámetros URL interesantes para SSRF, redirect, SQLi, etc."""
     JUICY = {
@@ -391,6 +407,7 @@ def analyze_depth_opportunities(domain: str, domain_id: int,
     suggestions    = get_ai_suggestions(domain_id)
     acx_findings   = get_acunetix_findings(domain_id)
     technologies   = get_technologies(domain_id)
+    host_stack     = get_host_stack(domain_id)
     juicy_params   = get_juicy_params(domain_id)
     js_secrets     = get_js_secrets(domain_id)
     subdomains     = get_subdomain_info(domain_id)
@@ -435,6 +452,13 @@ def analyze_depth_opportunities(domain: str, domain_id: int,
          "category": t.get("category", ""),
          "subdomain": t.get("subdomain", "")}
         for t in technologies
+    ], ensure_ascii=False)
+
+    # Stack consolidado por host — el modelo razona sobre cada host como unidad
+    host_stack_summary = json.dumps([
+        {"host": h["subdomain"], "stack": h.get("techs", ""),
+         "categories": h.get("categories", "")}
+        for h in host_stack[:60]
     ], ensure_ascii=False)
 
     params_summary = json.dumps([
@@ -505,6 +529,9 @@ Responde SOLO en JSON válido, sin texto adicional ni markdown."""
 
 ## Stack tecnológico detectado (con versiones):
 {tech_summary}
+
+## Stack consolidado por host (registry-based, validado con catch-all guard):
+{host_stack_summary}
 
 ## Subdominios alive:
 {subs_summary}

@@ -1,0 +1,930 @@
+[
+  {
+    "name": "Adobe Experience Manager",
+    "category": "cms",
+    "header_re": "^X-Dispatcher:|^X-Vhost:\\s*(publish|author)|^X-(CQ|AEM|Adobe|Sling)-|^(Server|Via):.*(Day-Servlet|Communique|Apache Sling|CQ[0-9]|Adobe Experience Manager)",
+    "body_re": "cq:Page|cq:template|/libs/granite|/etc/clientlibs/|granite\\.author|granite/ui|jcr:primaryType|data-cq-data-path|data-type=\"page basicpage\"|crxde-lite",
+    "url_probes": ["/libs/granite/core/content/login.html", "/crx/de/index.jsp"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "aem"
+  },
+  {
+    "name": "WordPress",
+    "category": "cms",
+    "header_re": "^Link:.*wp-json",
+    "body_re": "/wp-content/|/wp-includes/|wp-emoji-release|<meta name=\"generator\" content=\"WordPress",
+    "url_probes": ["/wp-login.php", "/wp-json/"],
+    "url_status_ok": "200,301,302",
+    "cve_family": "wordpress"
+  },
+  {
+    "name": "Drupal",
+    "category": "cms",
+    "header_re": "^X-Generator:\\s*Drupal|^X-Drupal-",
+    "body_re": "Drupal\\.behaviors|drupal-settings-json|sites/default/files",
+    "url_probes": ["/user/login", "/CHANGELOG.txt", "/core/CHANGELOG.txt"],
+    "url_status_ok": "200,302",
+    "cve_family": "drupal"
+  },
+  {
+    "name": "Joomla",
+    "category": "cms",
+    "header_re": "^X-Content-Encoded-By:\\s*Joomla",
+    "body_re": "/components/com_|/templates/system/|<meta name=\"generator\" content=\"Joomla",
+    "url_probes": ["/administrator/", "/index.php?option=com_users"],
+    "url_status_ok": "200,302",
+    "cve_family": "joomla"
+  },
+  {
+    "name": "Liferay",
+    "category": "cms",
+    "header_re": "^Liferay-Portal:",
+    "body_re": "/o/portal-web|liferay\\.com|portlet-",
+    "url_probes": ["/api/jsonws", "/c/portal/login"],
+    "url_status_ok": "200,302,401,403",
+    "cve_family": "liferay"
+  },
+  {
+    "name": "SharePoint",
+    "category": "cms",
+    "header_re": "^MicrosoftSharePointTeamServices:|^X-SharePointHealthScore:",
+    "body_re": "/_layouts/15/|SP\\.SOD\\.executeFunc|/SiteAssets/",
+    "url_probes": ["/_layouts/15/Login.aspx", "/_api/web"],
+    "url_status_ok": "200,302,401,403",
+    "cve_family": "sharepoint"
+  },
+  {
+    "name": "Sitecore",
+    "category": "cms",
+    "header_re": "^X-Sitecore-",
+    "body_re": "/sitecore/shell/|sitecore_visitor",
+    "url_probes": ["/sitecore/login", "/sitecore/admin"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "sitecore"
+  },
+  {
+    "name": "Hippo CMS",
+    "category": "cms",
+    "header_re": "^X-Hippo-CMS-",
+    "body_re": "hippo:|brXM|bloomreach|hippoComponent",
+    "url_probes": ["/cms/login", "/cms/repository"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "hippo"
+  },
+  {
+    "name": "Bloomreach",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "brXM|bloomreach|brSM|/site/binaries",
+    "url_probes": ["/site/login"],
+    "url_status_ok": "200,302",
+    "cve_family": "bloomreach"
+  },
+  {
+    "name": "OpenCMS",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "opencms\\.scripts|/opencms/|OpenCmsLogin",
+    "url_probes": ["/system/login/", "/opencms/system/login/"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "opencms"
+  },
+  {
+    "name": "Magnolia CMS",
+    "category": "cms",
+    "header_re": "^X-Magnolia-Registration:",
+    "body_re": "magnolia-cms|info\\.magnolia",
+    "url_probes": ["/.magnolia/admincentral", "/.magnolia/pages/login.html"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "magnolia"
+  },
+  {
+    "name": "Umbraco",
+    "category": "cms",
+    "header_re": "^X-Umbraco-Version:",
+    "body_re": "umbraco-cms|/umbraco/lib",
+    "url_probes": ["/umbraco/login.aspx", "/umbraco/"],
+    "url_status_ok": "200,302",
+    "cve_family": "umbraco"
+  },
+  {
+    "name": "Concrete5",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "/concrete/|CCM_REL|concrete5",
+    "url_probes": ["/dashboard", "/index.php/dashboard"],
+    "url_status_ok": "200,302",
+    "cve_family": "concrete5"
+  },
+  {
+    "name": "Ghost",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "<meta name=\"generator\" content=\"Ghost",
+    "url_probes": ["/ghost/api/", "/ghost/"],
+    "url_status_ok": "200,302",
+    "cve_family": "ghost"
+  },
+  {
+    "name": "Strapi",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "strapi-debug|powered.by.strapi",
+    "url_probes": ["/admin", "/_health"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "strapi"
+  },
+  {
+    "name": "Contentful",
+    "category": "cms",
+    "header_re": "",
+    "body_re": "contentful\\.com|images\\.ctfassets\\.net",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "contentful"
+  },
+
+  {
+    "name": "Magento",
+    "category": "ecommerce",
+    "header_re": "^X-Magento-",
+    "body_re": "magentoStorefrontEvents|Magento_|/static/version|skin/frontend",
+    "url_probes": ["/admin/", "/customer/account/login/"],
+    "url_status_ok": "200,302",
+    "cve_family": "magento"
+  },
+  {
+    "name": "Shopify",
+    "category": "ecommerce",
+    "header_re": "^X-ShardId:|^X-Shopify-",
+    "body_re": "cdn\\.shopify\\.com|Shopify\\.theme|shopify-section",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "shopify"
+  },
+  {
+    "name": "WooCommerce",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "wc-blocks|woocommerce|wc-cart-fragments",
+    "url_probes": ["/wc-api/v3/", "/?wc-ajax=add_to_cart"],
+    "url_status_ok": "",
+    "cve_family": "woocommerce"
+  },
+  {
+    "name": "PrestaShop",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "prestashop|/themes/.*PSV|var prestashop",
+    "url_probes": ["/admin-dev", "/admin"],
+    "url_status_ok": "200,301,302",
+    "cve_family": "prestashop"
+  },
+  {
+    "name": "BigCommerce",
+    "category": "ecommerce",
+    "header_re": "^X-Bc-Apigateway:",
+    "body_re": "bigcommerce\\.com|/stencil/",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "bigcommerce"
+  },
+  {
+    "name": "Salesforce Commerce Cloud",
+    "category": "ecommerce",
+    "header_re": "^X-Dw-Request-Base-Id:",
+    "body_re": "/on/demandware\\.|dwSku|sfcc",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "sfcc"
+  },
+  {
+    "name": "SAP Hybris",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "/_ui/responsive|hybris|/cxLib/",
+    "url_probes": ["/hac/", "/storefront/login"],
+    "url_status_ok": "200,302,401,403",
+    "cve_family": "hybris"
+  },
+  {
+    "name": "Salesforce Lightning",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "Aura\\.Component|salesforce\\.com|/auraFW/|aura:|sforce\\.one|app\\.aura\\.framework",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "salesforce"
+  },
+  {
+    "name": "Spree",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "spree-version|/spree_/",
+    "url_probes": ["/admin"],
+    "url_status_ok": "200,302",
+    "cve_family": "spree"
+  },
+  {
+    "name": "OpenCart",
+    "category": "ecommerce",
+    "header_re": "",
+    "body_re": "/catalog/view/theme/|opencart",
+    "url_probes": ["/admin"],
+    "url_status_ok": "200,302",
+    "cve_family": "opencart"
+  },
+
+  {
+    "name": "Apache HTTPd",
+    "category": "webserver",
+    "header_re": "^Server:\\s*Apache",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "apache"
+  },
+  {
+    "name": "Nginx",
+    "category": "webserver",
+    "header_re": "^Server:\\s*nginx",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "nginx"
+  },
+  {
+    "name": "Microsoft IIS",
+    "category": "webserver",
+    "header_re": "^Server:\\s*Microsoft-IIS",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "iis"
+  },
+  {
+    "name": "LiteSpeed",
+    "category": "webserver",
+    "header_re": "^Server:\\s*LiteSpeed|^X-LiteSpeed-",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "litespeed"
+  },
+  {
+    "name": "Apache Tomcat",
+    "category": "appserver",
+    "header_re": "^Server:\\s*(Apache.*Tomcat|Apache-Coyote)|^X-Tomcat-Version:",
+    "body_re": "Apache Tomcat/|<title>Apache Tomcat|Tomcat[/ ][0-9]+\\.|/manager/status",
+    "url_probes": ["/manager/html", "/host-manager/", "/examples/"],
+    "url_status_ok": "200,401",
+    "cve_family": "tomcat"
+  },
+  {
+    "name": "JBoss/WildFly",
+    "category": "appserver",
+    "header_re": "^X-Powered-By:.*(JBoss|WildFly|Undertow)",
+    "body_re": "JBoss|WildFly|JMX Agent|JBoss Application Server|Welcome to JBoss",
+    "url_probes": ["/jmx-console/", "/admin-console/", "/web-console/"],
+    "url_status_ok": "200,401",
+    "cve_family": "jboss"
+  },
+  {
+    "name": "Oracle WebLogic",
+    "category": "appserver",
+    "header_re": "^Server:\\s*(WebLogic|Oracle)",
+    "body_re": "WebLogic Server|Oracle WebLogic|/console/login",
+    "url_probes": ["/console/login/LoginForm.jsp"],
+    "url_status_ok": "200",
+    "cve_family": "weblogic"
+  },
+  {
+    "name": "IBM WebSphere",
+    "category": "appserver",
+    "header_re": "^Server:.*WebSphere",
+    "body_re": "WebSphere Application Server|ibm-banner|ibmadmin",
+    "url_probes": ["/ibm/console/logon.jsp"],
+    "url_status_ok": "200",
+    "cve_family": "websphere"
+  },
+  {
+    "name": "Eclipse Jetty",
+    "category": "appserver",
+    "header_re": "^Server:\\s*Jetty",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "jetty"
+  },
+  {
+    "name": "GlassFish",
+    "category": "appserver",
+    "header_re": "^Server:.*GlassFish",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "glassfish"
+  },
+
+  {
+    "name": "Spring Boot",
+    "category": "framework",
+    "header_re": "^X-Application-Context:",
+    "body_re": "\"status\":\"UP\"|\"status\":\"DOWN\"|spring-boot|_links.*self.*actuator|Whitelabel Error",
+    "url_probes": ["/actuator/health", "/actuator/info", "/actuator"],
+    "url_status_ok": "200",
+    "cve_family": "spring"
+  },
+  {
+    "name": "Spring Cloud Config",
+    "category": "framework",
+    "header_re": "^Content-Type:.*spring-boot\\.actuator",
+    "body_re": "_links.*application|propertySources",
+    "url_probes": ["/application-default.json", "/application/default"],
+    "url_status_ok": "200",
+    "cve_family": "spring-cloud-config"
+  },
+  {
+    "name": "Express",
+    "category": "framework",
+    "header_re": "^X-Powered-By:\\s*Express",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "express"
+  },
+  {
+    "name": "Django",
+    "category": "framework",
+    "header_re": "^X-Frame-Options:\\s*DENY.*Django",
+    "body_re": "csrfmiddlewaretoken|/static/admin/|django\\.jQuery",
+    "url_probes": ["/admin/", "/admin/login/"],
+    "url_status_ok": "200,302",
+    "cve_family": "django"
+  },
+  {
+    "name": "Ruby on Rails",
+    "category": "framework",
+    "header_re": "^X-Powered-By:.*Phusion|^Server:.*Phusion",
+    "body_re": "csrf-token|csrf-param|action_cable",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "rails"
+  },
+  {
+    "name": "Laravel",
+    "category": "framework",
+    "header_re": "^Set-Cookie:.*XSRF-TOKEN|^Set-Cookie:.*laravel_session",
+    "body_re": "Laravel|csrf-token",
+    "url_probes": ["/.env", "/_ignition/health-check"],
+    "url_status_ok": "200,403",
+    "cve_family": "laravel"
+  },
+  {
+    "name": "Next.js",
+    "category": "framework",
+    "header_re": "^X-Powered-By:\\s*Next\\.js",
+    "body_re": "/_next/static/|__NEXT_DATA__|next/router",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "nextjs"
+  },
+  {
+    "name": "Nuxt",
+    "category": "framework",
+    "header_re": "",
+    "body_re": "/_nuxt/|window\\.__NUXT__",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "nuxt"
+  },
+  {
+    "name": "Vue.js",
+    "category": "framework",
+    "header_re": "",
+    "body_re": "<div id=\"app\".*vue|window.__VUE_DEVTOOLS|app\\.[a-f0-9]+\\.js.*chunk-vendors",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "vue"
+  },
+  {
+    "name": "React",
+    "category": "framework",
+    "header_re": "",
+    "body_re": "<div id=\"root\".*react|webpackJsonp|react-dom",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "react"
+  },
+  {
+    "name": "Angular",
+    "category": "framework",
+    "header_re": "",
+    "body_re": "ng-version=|ng-controller|app-root|<div id=\"app\".*angular",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "angular"
+  },
+  {
+    "name": "Flask",
+    "category": "framework",
+    "header_re": "^Server:\\s*Werkzeug",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "flask"
+  },
+  {
+    "name": "FastAPI",
+    "category": "framework",
+    "header_re": "",
+    "body_re": "swagger-ui|fastapi|/openapi\\.json",
+    "url_probes": ["/docs", "/redoc", "/openapi.json"],
+    "url_status_ok": "200",
+    "cve_family": "fastapi"
+  },
+
+  {
+    "name": "Keycloak",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "keycloak\\.js|/auth/realms/",
+    "url_probes": ["/auth/realms/master", "/auth/admin/master/console/"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "keycloak"
+  },
+  {
+    "name": "PingFederate",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "/pf/idp|/pf/heartbeat",
+    "url_probes": ["/pf/heartbeat.ping", "/pf/idp/sts.wst", "/as/authorize"],
+    "url_status_ok": "200,302,400",
+    "cve_family": "pingfederate"
+  },
+  {
+    "name": "Auth0",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "auth0\\.com|cdn\\.auth0\\.com|auth0-spa-js",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "auth0"
+  },
+  {
+    "name": "Okta",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "okta\\.com|okta-signin-widget",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "okta"
+  },
+  {
+    "name": "ADFS",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "/adfs/services/trust|/adfs/ls/|MSISLoopDetectionCookie|loginContext|Microsoft.IdentityServer",
+    "url_probes": ["/adfs/ls/", "/adfs/services/trust/2005/usernamemixed"],
+    "url_status_ok": "200,400,401",
+    "cve_family": "adfs"
+  },
+  {
+    "name": "Azure AD",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "login\\.microsoftonline\\.com|aadcdn\\.msftauth\\.net",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "azure-ad"
+  },
+  {
+    "name": "AWS Cognito",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "cognito-idp\\.|amazoncognito\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "cognito"
+  },
+  {
+    "name": "Gigya",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "cdns?\\..*gigya\\.com|gigya-",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "gigya"
+  },
+  {
+    "name": "Stytch",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "stytch\\.com|js\\.stytch\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "stytch"
+  },
+  {
+    "name": "Ilex Sign&Go",
+    "category": "sso",
+    "header_re": "",
+    "body_re": "Sign&Go|signandgo|sng_authz_req_id|IdPOAuth2",
+    "url_probes": ["/IdPOAuth2/.well-known/openid-configuration"],
+    "url_status_ok": "200",
+    "cve_family": "ilex"
+  },
+
+  {
+    "name": "Jenkins",
+    "category": "devops",
+    "header_re": "^X-Jenkins:",
+    "body_re": "Jenkins ver\\.|jenkins-/static/",
+    "url_probes": ["/login", "/api/json"],
+    "url_status_ok": "200,401,403",
+    "cve_family": "jenkins"
+  },
+  {
+    "name": "GitLab",
+    "category": "devops",
+    "header_re": "^X-Gitlab-",
+    "body_re": "gitlab-version|GitLab Community|GitLab Enterprise",
+    "url_probes": ["/users/sign_in", "/help"],
+    "url_status_ok": "200,302",
+    "cve_family": "gitlab"
+  },
+  {
+    "name": "Atlassian Jira",
+    "category": "devops",
+    "header_re": "^X-AUSERNAME:|^X-AREQUESTID:",
+    "body_re": "jira-frontend-|atlassian-token",
+    "url_probes": ["/login.jsp", "/rest/api/2/serverInfo"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "jira"
+  },
+  {
+    "name": "Atlassian Confluence",
+    "category": "devops",
+    "header_re": "^X-Confluence-",
+    "body_re": "confluence-version|confluence-",
+    "url_probes": ["/login.action", "/rest/api/content"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "confluence"
+  },
+  {
+    "name": "Bitbucket",
+    "category": "devops",
+    "header_re": "^X-AUSERNAME:.*bitbucket",
+    "body_re": "bitbucket\\.org|bitbucket-",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "bitbucket"
+  },
+  {
+    "name": "ArgoCD",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "argocd\\.io|argo-cd|argocd-version|/applications",
+    "url_probes": ["/api/version"],
+    "url_status_ok": "200",
+    "cve_family": "argocd"
+  },
+  {
+    "name": "Kubernetes Dashboard",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "kubernetes-dashboard|/static/dashboard|kd-app",
+    "url_probes": ["/"],
+    "url_status_ok": "200",
+    "cve_family": "k8s-dashboard"
+  },
+  {
+    "name": "Grafana",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "/public/build/|grafana_session|grafana-app",
+    "url_probes": ["/login", "/api/health"],
+    "url_status_ok": "200,302",
+    "cve_family": "grafana"
+  },
+  {
+    "name": "Prometheus",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "Prometheus Time Series|prometheus_build_info|prometheus_http_requests_total|<title>Prometheus",
+    "url_probes": ["/metrics", "/api/v1/status/runtimeinfo"],
+    "url_status_ok": "200",
+    "cve_family": "prometheus"
+  },
+  {
+    "name": "Kibana",
+    "category": "devops",
+    "header_re": "^kbn-name:",
+    "body_re": "/bundles/.*kibana|kbn-version",
+    "url_probes": ["/api/status"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "kibana"
+  },
+  {
+    "name": "Elasticsearch",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "\"cluster_name\".*\"version\".*\"build_hash\"",
+    "url_probes": ["/_cluster/health", "/_cat/indices"],
+    "url_status_ok": "200,401",
+    "cve_family": "elasticsearch"
+  },
+  {
+    "name": "Splunk",
+    "category": "devops",
+    "header_re": "",
+    "body_re": "splunk\\.com|/static/img/skins/default/",
+    "url_probes": ["/en-US/account/login", "/services/server/info"],
+    "url_status_ok": "200,302,401",
+    "cve_family": "splunk"
+  },
+
+  {
+    "name": "GraphQL",
+    "category": "api",
+    "header_re": "",
+    "body_re": "graphql|\"errors\":\\s*\\[|\"data\":|GraphQL|introspection|GRAPHQL_PARSE_FAILED|Must provide query string",
+    "url_probes": ["/graphql", "/api/graphql", "/v1/graphql", "/graphiql"],
+    "url_status_ok": "200,400,405",
+    "cve_family": "graphql"
+  },
+  {
+    "name": "Swagger/OpenAPI",
+    "category": "api",
+    "header_re": "",
+    "body_re": "swagger-ui|swagger-ui-bundle|openapi:\\s*[\"']3",
+    "url_probes": ["/swagger", "/swagger-ui.html", "/api-docs", "/openapi.json", "/v2/api-docs"],
+    "url_status_ok": "200",
+    "cve_family": "swagger"
+  },
+  {
+    "name": "REST API (Spring)",
+    "category": "api",
+    "header_re": "",
+    "body_re": "_links.*self.*href|HATEOAS",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "spring-rest"
+  },
+  {
+    "name": "Apollo GraphQL",
+    "category": "api",
+    "header_re": "^Apollographql-Client-Name:",
+    "body_re": "apollo-link|@apollo/client",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "apollo"
+  },
+  {
+    "name": "phpMyAdmin",
+    "category": "admin",
+    "header_re": "",
+    "body_re": "phpMyAdmin|pma_password",
+    "url_probes": ["/phpmyadmin/", "/pma/", "/phpMyAdmin/"],
+    "url_status_ok": "200,302",
+    "cve_family": "phpmyadmin"
+  },
+  {
+    "name": "Adminer",
+    "category": "admin",
+    "header_re": "",
+    "body_re": "<title>Login - Adminer|<title>Adminer",
+    "url_probes": ["/adminer.php", "/adminer/"],
+    "url_status_ok": "200,302",
+    "cve_family": "adminer"
+  },
+
+  {
+    "name": "Cloudflare",
+    "category": "cdn",
+    "header_re": "^Server:\\s*cloudflare|^CF-RAY:",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "cloudflare"
+  },
+  {
+    "name": "Akamai",
+    "category": "cdn",
+    "header_re": "^Server:.*AkamaiGHost|^X-Akamai-",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "akamai"
+  },
+  {
+    "name": "Fastly",
+    "category": "cdn",
+    "header_re": "^Via:.*varnish.*Fastly|^X-Served-By:.*fastly|^Fastly-",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "fastly"
+  },
+  {
+    "name": "AWS CloudFront",
+    "category": "cdn",
+    "header_re": "^Via:.*CloudFront|^X-Amz-Cf-",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "cloudfront"
+  },
+  {
+    "name": "AWS S3",
+    "category": "cdn",
+    "header_re": "^Server:\\s*AmazonS3|^X-Amz-Bucket-Region:",
+    "body_re": "<ListBucketResult|<Code>NoSuchBucket",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "s3"
+  },
+  {
+    "name": "Imperva",
+    "category": "waf",
+    "header_re": "^X-Iinfo:|^Server:\\s*Incapsula",
+    "body_re": "Incapsula incident",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "imperva"
+  },
+  {
+    "name": "F5 BIG-IP",
+    "category": "waf",
+    "header_re": "^Set-Cookie:.*BIGipServer|^X-WA-Info:",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "f5"
+  },
+  {
+    "name": "Sucuri",
+    "category": "waf",
+    "header_re": "^Server:\\s*Sucuri|^X-Sucuri-",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "sucuri"
+  },
+
+  {
+    "name": "Adobe Analytics",
+    "category": "analytics",
+    "header_re": "",
+    "body_re": "assets\\.adobedtm\\.com|s_code\\.js|/b/ss/",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "adobe-analytics"
+  },
+  {
+    "name": "Google Tag Manager",
+    "category": "analytics",
+    "header_re": "",
+    "body_re": "googletagmanager\\.com/gtm\\.js",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "gtm"
+  },
+  {
+    "name": "Hotjar",
+    "category": "analytics",
+    "header_re": "",
+    "body_re": "static\\.hotjar\\.com|hjid",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "hotjar"
+  },
+  {
+    "name": "Sentry",
+    "category": "analytics",
+    "header_re": "",
+    "body_re": "browser\\.sentry-cdn\\.com|@sentry/browser|sentry_init|getsentry\\.com",
+    "url_probes": ["/api/0/projects/"],
+    "url_status_ok": "200,401",
+    "cve_family": "sentry"
+  },
+
+  {
+    "name": "Stripe",
+    "category": "payment",
+    "header_re": "",
+    "body_re": "js\\.stripe\\.com|api\\.stripe\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "stripe"
+  },
+  {
+    "name": "PayPal",
+    "category": "payment",
+    "header_re": "",
+    "body_re": "paypal\\.com/sdk|paypalobjects\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "paypal"
+  },
+
+  {
+    "name": "Mautic",
+    "category": "marketing",
+    "header_re": "",
+    "body_re": "mautic\\.|/index_dev\\.php",
+    "url_probes": ["/s/login"],
+    "url_status_ok": "200,302",
+    "cve_family": "mautic"
+  },
+  {
+    "name": "HubSpot",
+    "category": "marketing",
+    "header_re": "",
+    "body_re": "hs-scripts\\.com|js\\.hs-scripts",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "hubspot"
+  },
+  {
+    "name": "Salesforce Pardot",
+    "category": "marketing",
+    "header_re": "",
+    "body_re": "pi\\.pardot\\.com|/pd\\.js",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "pardot"
+  },
+  {
+    "name": "Intercom",
+    "category": "support",
+    "header_re": "",
+    "body_re": "widget\\.intercom\\.io|js\\.intercom",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "intercom"
+  },
+  {
+    "name": "Zendesk",
+    "category": "support",
+    "header_re": "",
+    "body_re": "zdassets\\.com|zendesk\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "zendesk"
+  },
+  {
+    "name": "Sprinklr",
+    "category": "support",
+    "header_re": "",
+    "body_re": "sprinklr|/spr-cdn/",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "sprinklr"
+  },
+  {
+    "name": "Stytch",
+    "category": "auth",
+    "header_re": "",
+    "body_re": "stytch\\.com",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "stytch"
+  },
+  {
+    "name": "Apereo CAS",
+    "category": "sso",
+    "header_re": "^Location:.*?/cas/login\\?",
+    "body_re": "Apereo CAS|jasig CAS|cas-login-form|<title>CAS - Central Authentication Service",
+    "url_probes": ["/cas/login"],
+    "url_status_ok": "200",
+    "cve_family": "cas"
+  },
+  {
+    "name": "Microsoft IIS Owin",
+    "category": "framework",
+    "header_re": "^Server:\\s*Kestrel|^X-Powered-By:\\s*ASP\\.NET Core",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "aspnet-core"
+  },
+  {
+    "name": "Varnish Cache",
+    "category": "cdn",
+    "header_re": "^X-Varnish:|^Via:.*varnish",
+    "body_re": "",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "varnish"
+  },
+  {
+    "name": "Tealium",
+    "category": "analytics",
+    "header_re": "",
+    "body_re": "utag\\.js|tags\\.tiqcdn\\.com|tealium",
+    "url_probes": [],
+    "url_status_ok": "",
+    "cve_family": "tealium"
+  }
+]

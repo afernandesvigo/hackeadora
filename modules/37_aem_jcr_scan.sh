@@ -75,6 +75,21 @@ _aem_code_noredirect() {
 _aem_fingerprint() {
   local BASE="$1"   # https://host
 
+  # Check 0: tech detection ya hecha por mod 10 (Capa C registry).
+  # Si technologies tiene AEM para esta sub, confiar y skip los probes redundantes.
+  # Mod 10 ya valida con catch-all guard + body markers + url_probe body match.
+  local SUB
+  SUB=$(echo "$BASE" | sed 's|https\?://||;s|:.*||;s|/.*||')
+  local DB_AEM
+  DB_AEM=$(sqlite3 "$DB_PATH" \
+    "SELECT 1 FROM technologies
+     WHERE subdomain='${SUB//\'/\'\'}'
+       AND (tech_name LIKE '%Adobe Experience Manager%' OR tech_name LIKE '%AEM%')
+     LIMIT 1;" 2>/dev/null)
+  if [[ -n "$DB_AEM" ]]; then
+    return 0
+  fi
+
   # 1. jcr:content.json en paths comunes → respuesta JSON con jcr:uuid
   local JCR_TEST
   for p in "/en-us/jcr:content.json" "/en/jcr:content.json" \
@@ -95,19 +110,57 @@ _aem_fingerprint() {
     fi
   done
 
-  # 3. X-Content-Type-Options / Server header con Adobe/AEM
-  _h_head "$BASE/"
-  if echo "$HTTP_LAST_HEADERS" | grep -qi "adobe\|aem\|cq5\|day-servlet\|sling"; then
+  # 3. GET root sin redirect → analizar headers + body buscando markers AEM.
+  # Headers anclados a `^Header:` para no matchear "adobedtm" en CSP de
+  # redirect destinations (bug 2026-05-09).
+  _h_get_noredirect "$BASE/"
+  # 3a. Headers AEM-específicos (no aparecen en otros stacks):
+  #   X-Dispatcher (Apache module de AEM), X-Vhost: publish|author,
+  #   X-CQ-*, X-AEM-*, X-Adobe-*, X-Sling-*, Server con Day-Servlet/Communique/Sling
+  if echo "$HTTP_LAST_HEADERS" | grep -qiE \
+    '^X-Dispatcher:|^X-Vhost:[[:space:]]*(publish|author)|^X-(CQ|AEM|Adobe|Sling)-' \
+     || echo "$HTTP_LAST_HEADERS" | grep -qiE \
+    '^(Server|Via):.*(Day-Servlet|Communique|Apache Sling|CQ[0-9]|Adobe Experience Manager)'; then
+    return 0
+  fi
+  # 3b. Body markers AEM (Sling/Granite/CQ artifacts en HTML)
+  if echo "$HTTP_LAST_BODY" | grep -qE \
+    'data-type="page basicpage"|data-cq-data-path|/etc/clientlibs/|/libs/granite/|cq:template|cq:Page|granite\.author|granite/ui|"jcr:primaryType"'; then
     return 0
   fi
 
   # 4. Paths admin clásicos (sin Dispatcher: 200/302; con Dispatcher: 404)
+  # Bug fix 2026-05-09: usar _aem_code_noredirect para no falsificar 200 cuando el
+  # host redirige fuera del dominio (e.g. www.actualidad:6443 → cherrypick.es).
+  # Adicionalmente validar que body 200 contenga marcadores AEM reales.
   for p in "/libs/granite/core/content/login.html" \
             "/crx/de/index.jsp" "/system/console/bundles"; do
     local CODE
-    CODE=$(_aem_code "${BASE}${p}")
-    if [[ "$CODE" == "200" || "$CODE" == "302" || "$CODE" == "401" ]]; then
-      return 0
+    CODE=$(_aem_code_noredirect "${BASE}${p}")
+    if [[ "$CODE" == "401" ]]; then
+      return 0  # auth required en path AEM = AEM real
+    fi
+    if [[ "$CODE" == "200" ]]; then
+      # Validar que es AEM y no un redirect catch-all que devolvió 200
+      local AEM_BODY
+      HTTP_TIMEOUT="$_AEM_CURL_MAX" \
+        _h_get_noredirect "${BASE}${p}" --connect-timeout "$_AEM_CURL_TO" 2>/dev/null
+      AEM_BODY="$HTTP_LAST_BODY"
+      if echo "$AEM_BODY" | grep -qiE \
+        'AEM Sign In|Apache Sling|granite\.author|granite/ui|cq:Page|cq:template|jcr:primaryType|sling:resourceType|/libs/granite|/etc/clientlibs|crxde-lite'; then
+        return 0
+      fi
+    fi
+    if [[ "$CODE" == "302" ]]; then
+      # 302 intra-host (e.g. /libs/granite/login → /libs/granite/login.html?resource=...) = AEM
+      # 302 cross-host (e.g. → cherrypick.es) = redirect catch-all, NO AEM
+      local LOC HOST_BASE
+      LOC=$(echo "$HTTP_LAST_HEADERS" | grep -i '^location:' | head -1 | tr -d '\r' | sed 's/^[Ll]ocation:[[:space:]]*//')
+      HOST_BASE=$(echo "$BASE" | grep -oP '://[^/]+' | tr -d ':/')
+      # Si Location es relativo (path absoluto sin scheme) o apunta al mismo host, AEM
+      if [[ -z "$LOC" ]] || [[ "$LOC" == /* ]] || echo "$LOC" | grep -qF "$HOST_BASE"; then
+        return 0
+      fi
     fi
   done
 

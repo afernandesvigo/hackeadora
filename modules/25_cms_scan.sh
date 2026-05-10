@@ -510,13 +510,14 @@ _scan_aem() {
       rm -f "$AEM_OUT"
     fi
 
-    # Nuclei templates AEM
+    # Nuclei templates AEM (filtro: medium+, no fingerprint/detect)
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "aem,adobe" -silent -jsonl 2>/dev/null | \
+      nuclei -u "$BASE" -tags "aem,adobe" -severity medium,high,critical -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
           SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          is_nuclei_finding_actionable "$TEMPLATE" "$SEV" || continue
           _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
             "AEM Nuclei" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
         done
@@ -553,11 +554,12 @@ _scan_liferay() {
 
     # CVE-2020-7961 — Deserialización RCE (uno de los más famosos en H1)
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "liferay,cve-2020-7961" -silent -jsonl 2>/dev/null | \
+      nuclei -u "$BASE" -tags "liferay,cve-2020-7961" -severity medium,high,critical -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
           SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          is_nuclei_finding_actionable "$TEMPLATE" "$SEV" || continue
           _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
             "Liferay CVE" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
         done
@@ -1237,25 +1239,13 @@ _scan_hybris() {
        );" 2>/dev/null)
 
   # Detección adicional: probar /hac/ en todos los subdominios alive si no hay hits en DB
+  # Bug fix 2026-05-09: removido fallback de probe /hac/ a TODOS los alive subs
+  # secuencialmente. Si tech detection no captó Hybris, no merece probar 99 hosts
+  # con /hac/ a 6s/probe = ~10min de cuello. Hybris se detecta bien por whatweb.
   if [[ -z "$SUBS" ]]; then
-    local ALIVE_SUBS
-    ALIVE_SUBS=$(sqlite3 "$DB_PATH" \
-      "SELECT subdomain FROM subdomains WHERE domain_id=${DOMAIN_ID} AND status='alive';" \
-      2>/dev/null)
-    while IFS= read -r SUB; do
-      [[ -z "$SUB" ]] && continue
-      local HAC_STATUS
-      HAC_STATUS=$(curl -sk -A "${SCAN_UA:-Mozilla/5.0}" --max-time 6 \
-        -o /dev/null -w "%{http_code}" "https://${SUB}/hac/" 2>/dev/null)
-      # 403 o 302 en /hac/ ya indica que Hybris está detrás
-      if [[ "$HAC_STATUS" == "200" || "$HAC_STATUS" == "302" || "$HAC_STATUS" == "401" ]]; then
-        SUBS="${SUBS}${SUB}"$'\n'
-        log_info "  Hybris detectado por /hac/ en $SUB (HTTP $HAC_STATUS)"
-      fi
-    done <<< "$ALIVE_SUBS"
+    log_info "  Hybris/SAP Commerce: sin indicios en tech ni urls — saltando"
+    return
   fi
-
-  [[ -z "$SUBS" ]] && return
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check
@@ -1320,11 +1310,12 @@ _scan_hybris() {
 
     # Nuclei templates SAP Commerce
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "sap,hybris,commerce" -silent -jsonl 2>/dev/null | \
+      nuclei -u "$BASE" -tags "sap,hybris,commerce" -severity medium,high,critical -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
           SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          is_nuclei_finding_actionable "$TEMPLATE" "$SEV" || continue
           _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
             "SAP Hybris Nuclei" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
         done
@@ -1438,11 +1429,12 @@ _scan_sharepoint() {
 
     # Nuclei SharePoint
     if command -v nuclei &>/dev/null; then
-      nuclei -u "$BASE" -tags "sharepoint,microsoft" -silent -jsonl 2>/dev/null | \
+      nuclei -u "$BASE" -tags "sharepoint,microsoft" -severity medium,high,critical -silent -jsonl 2>/dev/null | \
         while IFS= read -r LINE; do
           local TEMPLATE SEV
           TEMPLATE=$(echo "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('template-id','?'))" 2>/dev/null)
           SEV=$(echo "$LINE"      | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('info',{}).get('severity','?'))" 2>/dev/null)
+          is_nuclei_finding_actionable "$TEMPLATE" "$SEV" || continue
           _cms_finding "$DOMAIN_ID" "$DOMAIN" "$BASE" \
             "SharePoint Nuclei" "$SEV" "Template: $TEMPLATE" "nuclei:$TEMPLATE"
         done
@@ -1550,7 +1542,9 @@ _scan_aspnet() {
 _scan_hippo() {
   local DOMAIN_ID="$1" DOMAIN="$2" OUT_DIR="$3"
 
-  # Detección: path /web/.content/ indexado, o tech_name Hippo/Bloomreach/brXM
+  # Detección: tech_name Hippo/Bloomreach/brXM o paths característicos en URLs
+  # Bug fix 2026-05-09: el tercer UNION ("todos los alive") hacía que _scan_hippo
+  # iterase 99 subs aunque ninguno fuera Hippo. ETA caía de 0min a ~30min/scan.
   local SUBS
   SUBS=$(sqlite3 "$DB_PATH" \
     "SELECT DISTINCT subdomain FROM technologies
@@ -1564,12 +1558,12 @@ _scan_hippo() {
          SELECT 1 FROM urls u WHERE u.domain_id=s.domain_id
            AND (u.url LIKE '%/web/.content/%' OR u.url LIKE '%/cms/login%'
                 OR u.url LIKE '%/cms/repository%')
-       )
-     UNION
-     SELECT subdomain FROM subdomains
-     WHERE domain_id=${DOMAIN_ID} AND status='alive';" 2>/dev/null)
+       );" 2>/dev/null)
 
-  [[ -z "$SUBS" ]] && return
+  if [[ -z "$SUBS" ]]; then
+    log_info "  Hippo: sin indicios — saltando (use OIDC_FORCE_ALL_SUBS=1 para forzar)"
+    return
+  fi
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   proxy_check

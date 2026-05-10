@@ -89,6 +89,23 @@ CREATE INDEX IF NOT EXISTS idx_tech_name    ON technologies(tech_name);
 CREATE INDEX IF NOT EXISTS idx_tech_version ON technologies(tech_name, tech_version);
 CREATE INDEX IF NOT EXISTS idx_tech_domain  ON technologies(domain_id);
 
+-- View: host_stack — stack consolidado por subdomain alive
+-- Consumida por core/ai_advisor.py:get_host_stack() y por queries manuales.
+CREATE VIEW IF NOT EXISTS host_stack AS
+SELECT s.domain_id,
+       s.subdomain,
+       s.status,
+       GROUP_CONCAT(
+         DISTINCT t.tech_name ||
+         CASE WHEN t.tech_version IS NOT NULL AND t.tech_version != ''
+              THEN ' v' || t.tech_version ELSE '' END
+       ) AS techs,
+       GROUP_CONCAT(DISTINCT t.category) AS categories
+FROM subdomains s
+LEFT JOIN technologies t ON t.subdomain = s.subdomain AND t.domain_id = s.domain_id
+WHERE s.status='alive'
+GROUP BY s.domain_id, s.subdomain, s.status;
+
 -- Historial de scans
 CREATE TABLE IF NOT EXISTS scan_history (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

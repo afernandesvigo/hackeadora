@@ -278,6 +278,24 @@ _run_pipeline() {
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
 
+    # GraphQL scan — introspection, batching, sensitive fields (Tier 2.2)
+    run_module "39_graphql_scan"
+
+    # CVE matcher — cruza tech_name+version contra cve_catalog (Tier 2.1)
+    run_module "40_cve_matcher"
+
+    # Auth-state IDOR replay — no-cookie bypass + cookie A/B swap opt-in (Tier 2.3)
+    run_module "41_auth_replay"
+
+    # XXE — file:// LFI + OOB canary en endpoints XML (Tier 2.4)
+    run_module "42_xxe_scan"
+
+    # Prototype pollution — query/JSON __proto__ + constructor (Tier 2.5)
+    run_module "43_prototype_pollution"
+
+    # WebSocket — origin check, JWT en URL, ws:// no-TLS (Tier 2.6)
+    run_module "44_websocket_scan"
+
     # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
     run_module "99_verify_findings"
 
@@ -337,6 +355,24 @@ _run_pipeline() {
     run_module "04_nuclei_scan"
     run_module "07_nuclei_urls"
 
+    # GraphQL scan — introspection, batching, sensitive fields (Tier 2.2)
+    run_module "39_graphql_scan"
+
+    # CVE matcher — cruza tech_name+version contra cve_catalog (Tier 2.1)
+    run_module "40_cve_matcher"
+
+    # Auth-state IDOR replay — no-cookie bypass + cookie A/B swap opt-in (Tier 2.3)
+    run_module "41_auth_replay"
+
+    # XXE — file:// LFI + OOB canary en endpoints XML (Tier 2.4)
+    run_module "42_xxe_scan"
+
+    # Prototype pollution — query/JSON __proto__ + constructor (Tier 2.5)
+    run_module "43_prototype_pollution"
+
+    # WebSocket — origin check, JWT en URL, ws:// no-TLS (Tier 2.6)
+    run_module "44_websocket_scan"
+
     # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
     run_module "99_verify_findings"
   fi
@@ -347,6 +383,21 @@ _run_pipeline() {
     python3 "$SCRIPT_DIR/core/ai_advisor.py" --domain "$DOMAIN" 2>/dev/null || true
   else
     log_info "AI Advisor: configura ANTHROPIC_API_KEY en .env para activarlo"
+  fi
+
+  # ── Tech registry suggestions — para nutrir el catálogo iterativamente ──
+  local SUGG_FILE="$OUT_DIR/tech_suggestions.txt"
+  if [[ -s "$SUGG_FILE" ]]; then
+    local SUGG_COUNT
+    SUGG_COUNT=$(sort -u "$SUGG_FILE" | wc -l | tr -d ' ')
+    log_info "📚 Tech registry: $SUGG_COUNT markers desconocidos para review"
+    log_info "   Review:  ./tools/tech_review.sh $SUGG_FILE"
+    log_info "   Añadir:  ./tools/tech_add.sh \"Name\" category 'header_re' 'body_re' 'url_probes' 'status_ok'"
+    _telegram_send "📚 *Tech registry — review pendiente*
+🌐 \`${DOMAIN}\`
+🆕 Markers desconocidos: \`${SUGG_COUNT}\`
+📝 \`./tools/tech_review.sh ${SUGG_FILE}\`
+📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
   fi
 
   # ── Stats finales ─────────────────────────────────────────

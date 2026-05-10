@@ -646,6 +646,40 @@ module_run() {
   [[ "$JS_VER_COUNT" -gt 0 ]] && \
     log_ok "JS bundle versions: $JS_VER_COUNT detecciones (sin fetches)"
 
+  # ── Capa C: Custom registry (refactor 2026-05-09) ───────────
+  # Usa core/tech_registry.json + data/tech_registry_custom.json para detectar
+  # CMS/middleware/ecommerce/SSO/etc con guarda catch-all + body_re obligatorio.
+  # Resultado se persiste en `technologies` con source='registry'.
+  log_info "Capa C — custom tech registry (CMS/middleware/SSO/devops)..."
+  local REGISTRY_DETECTIONS=0
+  local SUGGESTIONS_FILE="$OUT_DIR/tech_suggestions.txt"
+  > "$SUGGESTIONS_FILE"
+
+  while IFS= read -r SUB; do
+    [[ -z "$SUB" ]] && continue
+    local BASE="https://${SUB}"
+    while IFS=$'\t' read -r KIND TECH CATEGORY CVE_FAMILY REASON; do
+      [[ -z "$KIND" ]] && continue
+      if [[ "$KIND" == "MATCH" ]]; then
+        db_upsert_tech "$DOMAIN_ID" "$BASE" "$SUB" \
+          "$TECH" "" "$CATEGORY" "90" "registry" 2>/dev/null || true
+        ((REGISTRY_DETECTIONS++))
+      elif [[ "$KIND" == "SUGGEST" ]]; then
+        echo "$SUB|$TECH" >> "$SUGGESTIONS_FILE"
+      fi
+    done < <(timeout 30 python3 -W ignore "$SCRIPT_DIR/core/tech_detector.py" --suggest --probe-host "$BASE" 2>/dev/null)
+  done < "$ALIVE"
+
+  [[ "$REGISTRY_DETECTIONS" -gt 0 ]] && \
+    log_ok "Custom registry: $REGISTRY_DETECTIONS detecciones (CMS/middleware/SSO/etc)"
+
+  if [[ -s "$SUGGESTIONS_FILE" ]]; then
+    local SUGG_COUNT
+    SUGG_COUNT=$(wc -l < "$SUGGESTIONS_FILE" | tr -d ' ')
+    log_info "tech_suggestions.txt: $SUGG_COUNT markers desconocidos para review manual"
+    log_info "  Para añadir: ./tools/tech_add.sh \"Tech Name\" CATEGORY HEADER_RE BODY_RE [URL_PROBES] [STATUS]"
+  fi
+
   # ── Resumen en log ────────────────────────────────────────
   TOTAL_FOUND=$(sqlite3 "$DB_PATH" \
     "SELECT COUNT(DISTINCT tech_name||url) FROM technologies WHERE domain_id=${DOMAIN_ID};" 2>/dev/null || echo "?")
