@@ -658,13 +658,16 @@ module_run() {
   while IFS= read -r SUB; do
     [[ -z "$SUB" ]] && continue
     local BASE="https://${SUB}"
-    while IFS=$'\t' read -r KIND TECH CATEGORY CVE_FAMILY REASON; do
+    # Tier 2.7: format actualizado a 6 campos (KIND TECH CAT CVE_FAM VERSION REASON)
+    while IFS=$'\t' read -r KIND TECH CATEGORY CVE_FAMILY VERSION REASON; do
       [[ -z "$KIND" ]] && continue
       if [[ "$KIND" == "MATCH" ]]; then
+        # VERSION puede estar vacío si el host no expone version banner
         db_upsert_tech "$DOMAIN_ID" "$BASE" "$SUB" \
-          "$TECH" "" "$CATEGORY" "90" "registry" 2>/dev/null || true
+          "$TECH" "$VERSION" "$CATEGORY" "90" "registry" 2>/dev/null || true
         ((REGISTRY_DETECTIONS++))
       elif [[ "$KIND" == "SUGGEST" ]]; then
+        # SUGGEST tiene format antiguo (KIND + 1 valor) — TECH contiene el marker
         echo "$SUB|$TECH" >> "$SUGGESTIONS_FILE"
       fi
     done < <(timeout 30 python3 -W ignore "$SCRIPT_DIR/core/tech_detector.py" --suggest --probe-host "$BASE" 2>/dev/null)

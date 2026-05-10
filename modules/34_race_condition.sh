@@ -145,6 +145,13 @@ _test_race_endpoint() {
     return 1
   fi
 
+  # Bug nuevo 2026-05-10: static assets (.js/.css/.png/etc) SIEMPRE devuelven 200
+  # a 15 requests concurrentes — NO es race condition. Skip por extensión.
+  if echo "$URL" | grep -qiE '\.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot|map|webp|json|xml|pdf|mp4|mp3|wav)([?#]|$)'; then
+    log_info "  Skipping race test — $URL es static asset (no race posible)"
+    return 1
+  fi
+
   # Pre-check: si el endpoint redirige fuera del dominio, skip (FP por redirect a GitHub, etc.)
   local URL_DOMAIN EFF_URL
   URL_DOMAIN=$(echo "$URL" | grep -oP 'https?://\K[^/?#]+')

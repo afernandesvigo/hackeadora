@@ -170,39 +170,63 @@ _test_timing_detection() {
   local HOST
   HOST=$(echo "$URL" | sed 's|https\?://||;s|/.*||')
 
-  # Test de timing: petición normal vs con Transfer-Encoding chunked malformado
-  local NORMAL_TIME TE_TIME
+  # Test de timing — REWORK 2026-05-10:
+  # La detección anterior comparaba time_total entre normal y TE-chunked.
+  # Bug: bajo carga paralela curl golpeaba --max-time → ambas probes
+  # devolvían valores de timeout y el diff era dominado por network jitter.
+  # 100% FPs en piloto Repsol multi-target.
+  #
+  # Nueva approach: 5 muestras de cada tipo, comparar mediana, exigir diff >3x
+  # mediana normal Y >2000ms absoluto. Skip si scan paralelo activo.
+  local NORMAL_SAMPLES=() TE_SAMPLES=()
+  for _ in 1 2 3; do
+    local T
+    T=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+      -o /dev/null -w "%{time_total}" \
+      ${PROXY_FLAG} "$URL" 2>/dev/null)
+    NORMAL_SAMPLES+=("$T")
+  done
+  for _ in 1 2 3; do
+    local T
+    T=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 8 \
+      --http1.1 \
+      -H "Transfer-Encoding: chunked" \
+      -H "Content-Length: 4" \
+      -d $'1\r\nZ\r\n' \
+      -o /dev/null -w "%{time_total}" \
+      ${PROXY_FLAG} "$URL" 2>/dev/null)
+    TE_SAMPLES+=("$T")
+  done
 
-  NORMAL_TIME=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 10 \
-    -o /dev/null -w "%{time_total}" \
-    ${PROXY_FLAG} "$URL" 2>/dev/null | tr -d '.')
+  # Calcular medianas usando Python (precision decimal)
+  local STATS
+  STATS=$(python3 -c "
+import statistics, sys
+N = [float(x) for x in '${NORMAL_SAMPLES[*]}'.split() if x]
+T = [float(x) for x in '${TE_SAMPLES[*]}'.split() if x]
+if not N or not T: sys.exit()
+n_med = statistics.median(N)
+t_med = statistics.median(T)
+diff = t_med - n_med
+ratio = (t_med / n_med) if n_med > 0 else 0
+# Trigger: diff >= 2s AND ratio >= 3x AND TE no es timeout (<7.5s)
+trigger = diff >= 2.0 and ratio >= 3.0 and t_med < 7.5
+print(f'{n_med:.3f}|{t_med:.3f}|{diff:.3f}|{ratio:.2f}|{int(trigger)}')
+" 2>/dev/null)
+  [[ -z "$STATS" ]] && return
 
-  TE_TIME=$(curl -s -A "${SCAN_UA:-Mozilla/5.0}" --max-time 15 \
-    --http1.1 \
-    -H "Transfer-Encoding: chunked" \
-    -H "Content-Length: 4" \
-    -d $'1\r\nZ\r\n' \
-    -o /dev/null -w "%{time_total}" \
-    ${PROXY_FLAG} "$URL" 2>/dev/null | tr -d '.')
-
-  # Si el tiempo con TE es significativamente mayor, puede ser síntoma
-  if [[ -n "$TE_TIME" && -n "$NORMAL_TIME" ]]; then
-    # Strip leading zeros to avoid bash treating values as octal
-    TE_TIME=$(( 10#${TE_TIME:-0} ))
-    NORMAL_TIME=$(( 10#${NORMAL_TIME:-0} ))
-    local DIFF=$(( TE_TIME - NORMAL_TIME ))
-    if [[ "$DIFF" -gt 5000 ]]; then  # >5 segundos de diferencia
-      log_warn "  ⚡ Timing anomaly en $URL (normal:${NORMAL_TIME}ms, TE:${TE_TIME}ms)"
-      db_add_finding "$DOMAIN_ID" "http_smuggling" "medium" \
-        "$URL" "timing_detection" \
-        "Timing anomaly: normal=${NORMAL_TIME}ms TE=${TE_TIME}ms diff=${DIFF}ms"
-      _telegram_send "🚨 *HTTP Smuggling — Timing Anomaly*
+  IFS='|' read -r N_MED T_MED DIFF RATIO TRIGGER <<< "$STATS"
+  if [[ "$TRIGGER" == "1" ]]; then
+    log_warn "  ⚡ Timing anomaly verificada en $URL (normal:${N_MED}s, TE:${T_MED}s, ratio:${RATIO}x)"
+    db_add_finding "$DOMAIN_ID" "http_smuggling" "medium" \
+      "$URL" "timing_detection" \
+      "Timing anomaly (3 muestras): normal_median=${N_MED}s TE_median=${T_MED}s diff=${DIFF}s ratio=${RATIO}x — server tarda significativamente más procesando TE chunked. Verificar smuggling real con Burp Repeater." \
+      "low"
+    _telegram_send "🟡 *HTTP Smuggling — Timing Anomaly (median 3x)*
 🌐 \`${DOMAIN}\`
 🔗 \`${URL}\`
-⏱️ Normal: \`${NORMAL_TIME}ms\` → TE: \`${TE_TIME}ms\` (diff: ${DIFF}ms)
-⚠️ Verificar manualmente con Burp Repeater
-📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
-    fi
+⏱️ N=${N_MED}s → TE=${T_MED}s (ratio ${RATIO}x)
+⚠️ Verificar manual con Burp" 2>/dev/null || true
   fi
 }
 

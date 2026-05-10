@@ -106,6 +106,26 @@ def headers_to_text(headers):
     return "\n".join(f"{k}: {v}" for k, v in headers.items())
 
 
+def extract_version(headers_text, body, version_re):
+    """Aplica version_re sobre headers + body, devuelve grupo 1 (versión) o ''.
+
+    Convención: version_re tiene EXACTAMENTE un grupo de captura `(\\d[\\d.]+)`
+    o similar. Match en headers gana sobre body.
+    """
+    if not version_re:
+        return ""
+    try:
+        for source in (headers_text or "", body or ""):
+            m = re.search(version_re, source, re.MULTILINE | re.IGNORECASE)
+            if m and m.groups():
+                v = m.group(1).strip()
+                if v:
+                    return v
+    except re.error:
+        pass
+    return ""
+
+
 def evaluate_entry(entry, base_url, headers_text, body, http_get_fn):
     """Return list of (match_reason) strings if entry matches, [] otherwise.
 
@@ -285,10 +305,13 @@ def detect(base_url, headers_text, body, registry, suggest=False, allow_url_prob
 
         reasons = evaluate_entry(entry_eval, base_url, headers_text, body, cached_get)
         if reasons:
+            # Tier 2.7: extraer versión si entry define version_re
+            version = extract_version(headers_text, body, entry.get("version_re", ""))
             matches.append({
                 "name": entry["name"],
                 "category": entry["category"],
                 "cve_family": entry.get("cve_family", ""),
+                "version": version,
                 "reason": ",".join(reasons),
             })
 
@@ -332,7 +355,8 @@ def main_cli():
     matches, suggestions = detect(url, headers_text, body, registry, suggest=suggest_flag)
 
     for m in matches:
-        print(f"MATCH\t{m['name']}\t{m['category']}\t{m['cve_family']}\t{m['reason']}")
+        # Format: MATCH\tname\tcategory\tcve_family\tversion\treason
+        print(f"MATCH\t{m['name']}\t{m['category']}\t{m['cve_family']}\t{m.get('version','')}\t{m['reason']}")
 
     for s in suggestions:
         print(f"SUGGEST\t{s}")

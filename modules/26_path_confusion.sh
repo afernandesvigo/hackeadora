@@ -333,12 +333,23 @@ _test_nginx_merge_slashes() {
 
     _h_get "${BASE}/${SEG}../" --path-as-is
     local TRAV_S="$HTTP_LAST_STATUS" TRAV_L="${#HTTP_LAST_BODY}"
+    local TRAV_HASH; TRAV_HASH=$(echo "$HTTP_LAST_BODY" | md5sum | cut -d' ' -f1)
 
     if _responses_similar "$TRAV_S" "$TRAV_L" "$ROOT_S" "$ROOT_L" && \
        [[ "$TRAV_S" == "200" ]]; then
+      # Anti-FP fix 2026-05-10: el `${SEG}../` puede normalizarse a `${SEG}/`
+      # (URL canonicalization de nginx). Si body de `${SEG}/` == body de
+      # `${SEG}../`, NO es traversal — es la misma página existente.
+      _h_get "${BASE}/${SEG}/" --path-as-is
+      local CANON_HASH; CANON_HASH=$(echo "$HTTP_LAST_BODY" | md5sum | cut -d' ' -f1)
+      if [[ "$TRAV_HASH" == "$CANON_HASH" ]]; then
+        # No es traversal: /es../ devuelve idéntico body que /es/
+        log_info "  Skip nginx_merge_slashes /${SEG}../ — canonicalization a /${SEG}/ (mismo body)"
+        continue
+      fi
       _finding "$DOMAIN_ID" "$DOMAIN" "${BASE}/${SEG}../" \
         "Nginx merge_slashes bypass" "high" \
-        "proxy_pass traversal: /${SEG}../ → raíz del backend" \
+        "proxy_pass traversal: /${SEG}../ → raíz del backend (verificado: body distinto a /${SEG}/)" \
         "nginx_merge_slashes"
     fi
   done <<< "$API_PATHS"

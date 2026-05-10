@@ -296,8 +296,37 @@ _run_pipeline() {
     # WebSocket — origin check, JWT en URL, ws:// no-TLS (Tier 2.6)
     run_module "44_websocket_scan"
 
+    # JWT vulnerabilities — alg:none, weak HS256, kid injection (Tier 2.8)
+    run_module "45_jwt_scan"
+
+    # SAML SP — XSW, signature stripping, comment injection NameID (Tier 2.9)
+    run_module "46_saml_scan"
+
+    # Tier 3 — 11 mods completando el OWASP/PortSwigger map
+    run_module "47_ssrf_deep"
+    run_module "48_nosql_injection"
+    run_module "49_oauth_deep"
+    run_module "50_file_upload"
+    run_module "51_deserialization"
+    run_module "52_ssti_deep"
+    run_module "53_ldap_xpath"
+    run_module "54_crlf_email"
+    run_module "55_mass_assignment"
+    run_module "56_cookie_attacks"
+    run_module "57_clickjacking"
+
+    # Tier 4.2 — coverage extras
+    run_module "58_dom_xss_static"
+    run_module "59_postmessage"
+    run_module "60_wcd_deep"
+    run_module "61_orm_injection"
+    run_module "62_graphql_dos"
+
     # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
     run_module "99_verify_findings"
+
+    # Tier 4.1 — Active exploit chain (sobre findings high-confidence verificados)
+    run_module "98_exploit_chain"
 
   else
     # ── MODO COMPLETO ───────────────────────────────────────
@@ -373,8 +402,37 @@ _run_pipeline() {
     # WebSocket — origin check, JWT en URL, ws:// no-TLS (Tier 2.6)
     run_module "44_websocket_scan"
 
+    # JWT vulnerabilities — alg:none, weak HS256, kid injection (Tier 2.8)
+    run_module "45_jwt_scan"
+
+    # SAML SP — XSW, signature stripping, comment injection NameID (Tier 2.9)
+    run_module "46_saml_scan"
+
+    # Tier 3 — 11 mods completando el OWASP/PortSwigger map
+    run_module "47_ssrf_deep"
+    run_module "48_nosql_injection"
+    run_module "49_oauth_deep"
+    run_module "50_file_upload"
+    run_module "51_deserialization"
+    run_module "52_ssti_deep"
+    run_module "53_ldap_xpath"
+    run_module "54_crlf_email"
+    run_module "55_mass_assignment"
+    run_module "56_cookie_attacks"
+    run_module "57_clickjacking"
+
+    # Tier 4.2 — coverage extras
+    run_module "58_dom_xss_static"
+    run_module "59_postmessage"
+    run_module "60_wcd_deep"
+    run_module "61_orm_injection"
+    run_module "62_graphql_dos"
+
     # Verificación post-pipeline (Mejora D del refactor 2026-05-09)
     run_module "99_verify_findings"
+
+    # Tier 4.1 — Active exploit chain (sobre findings high-confidence verificados)
+    run_module "98_exploit_chain"
   fi
 
   # ── AI Advisor al final (siempre, si está configurado) ─────
