@@ -24,3 +24,11 @@ blindxss/
 
 # Findings / reports (solo en servidor)
 hopgoblin_*.txt
+*_report.md
+*_report.pdf
+*_report_FINAL.md
+*_h1_report.md
+# Markdown writeups en root (per-target, no se versionan)
+/[a-z]*_*.md
+!/README.md
+!/ONBOARDING.md
