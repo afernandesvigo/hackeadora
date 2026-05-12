@@ -193,6 +193,7 @@ module_run() {
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -201,6 +202,26 @@ module_run() {
   # all 403s will be CF challenges — bypass attempts are pointless.
   # Check two random paths; if both return same non-zero size, it's a uniform WAF.
   local ALIVE_FILE="$OUT_DIR/subs_alive.txt"
+
+  # Generali fix 2026-05-11 (Bug #6 ext): si TODOS los hosts alive son SPA catch-all,
+  # cualquier .env/.git/etc devuelve 200 al seguir 302→login (FP storm). Skip module.
+  if [[ -s "$ALIVE_FILE" ]]; then
+    local _BP_TOTAL _BP_CATCHALL=0
+    _BP_TOTAL=$(wc -l < "$ALIVE_FILE" | tr -d ' ' | head -c 4)
+    local _BP_CHECK
+    _BP_CHECK=$(head -10 "$ALIVE_FILE" | wc -l | tr -d ' ')
+    while IFS= read -r _SUB; do
+      [[ -z "$_SUB" ]] && continue
+      if type is_catchall_host &>/dev/null && is_catchall_host "https://${_SUB}" 2>/dev/null; then
+        ((_BP_CATCHALL++))
+      fi
+    done < <(head -10 "$ALIVE_FILE")
+    if [[ "$_BP_CHECK" -ge 1 && "$_BP_CATCHALL" -ge "$_BP_CHECK" ]]; then
+      log_info "Todos los hosts alive ($_BP_CHECK) son SPA catch-all — saltando 403 bypass (Bug #6 ext)"
+      return 0
+    fi
+  fi
+
   local CF_BOT_PROTECTION=false
   if [[ -s "$ALIVE_FILE" ]]; then
     local _FIRST_SUB

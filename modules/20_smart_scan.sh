@@ -236,6 +236,14 @@ _test_ssrf() {
     # Señal de SSRF: status distinto o respuesta considerablemente más grande
     if [[ "$PROBE_STATUS" != "$BASELINE_STATUS" ]] && \
        [[ "$PROBE_STATUS" == "200" || "$PROBE_STATUS" == "301" || "$PROBE_STATUS" == "302" ]]; then
+      # Generali fix 2026-05-11 (Bug #17): descartar páginas WAF block que generan
+      # 200/403 sintético con HTML _Incapsula_Resource o cf-ray, no SSRF real.
+      local _SSRF_BODY
+      _SSRF_BODY=$(curl -sL --max-time 5 ${CURL_PROXY} \
+        "$(_url_set_param "$URL" "$PARAM" "$PROBE")" 2>/dev/null | head -c 2000)
+      if echo "$_SSRF_BODY" | grep -qiE '_Incapsula_Resource|Request unsuccessful|cf-ray|Attention Required.*Cloudflare|Just a moment\.\.\.|Akamai.*Reference #|AWS.*Request blocked'; then
+        continue
+      fi
       log_warn "  ⚡ Posible SSRF: $URL ($PARAM → $PROBE, HTTP $PROBE_STATUS)"
       _telegram_send "🔗 *Posible SSRF detectado*
 🌐 \`${DOMAIN}\`

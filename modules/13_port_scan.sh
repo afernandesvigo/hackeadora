@@ -223,6 +223,7 @@ PYEOF
     -title \
     -tech-detect \
     -ip \
+    -hash sha1 \
     -threads 30 \
     -timeout 10 \
     ${HTTPX_PROXY} \
@@ -237,18 +238,21 @@ PYEOF
 
   # ── Procesar y guardar en DB ──────────────────────────────
   local NEW_SERVICES=0
+  local DUP_SERVICES=0
   local NEW_SERVICE_URLS="$OUT_DIR/.new_port_services.txt"
   > "$NEW_SERVICE_URLS"
+  declare -gA SEEN_BUCKETS=()
 
   while IFS= read -r LINE; do
     [[ -z "$LINE" ]] && continue
 
-    local SERVICE_URL IP_ADDR HTTP_STATUS TITLE TECH PORT_NUM SUB
+    local SERVICE_URL IP_ADDR HTTP_STATUS TITLE TECH PORT_NUM SUB BODY_HASH
     SERVICE_URL=$(echo "$LINE" | jq -r '.url // ""')
     IP_ADDR=$(echo "$LINE"    | jq -r '.host // ""')
     HTTP_STATUS=$(echo "$LINE" | jq -r '.status_code // 0')
     TITLE=$(echo "$LINE"      | jq -r '.title // ""' | tr -d "'")
     TECH=$(echo "$LINE"       | jq -r '[.technologies[]?.name] | join(", ")' 2>/dev/null || echo "")
+    BODY_HASH=$(echo "$LINE"  | jq -r '.hash.body_sha1 // .hash.body_sha256 // .hash // ""' 2>/dev/null || echo "")
 
     [[ -z "$SERVICE_URL" ]] && continue
 
@@ -256,6 +260,8 @@ PYEOF
     PORT_NUM=$(echo "$SERVICE_URL" | grep -oP ':\d+' | tr -d ':' | head -1)
     SUB=$(echo "$SERVICE_URL" | sed 's|https\?://||;s|:.*||')
     [[ -z "$PORT_NUM" ]] && continue
+    # Defensa: 80/443 se cubren por el pipeline normal
+    [[ "$PORT_NUM" == "80" || "$PORT_NUM" == "443" ]] && continue
 
     # Verificar si ya existía
     local BEFORE
@@ -272,6 +278,21 @@ PYEOF
 
     if [[ "${BEFORE:-0}" == "0" ]]; then
       ((NEW_SERVICES++))
+
+      # ── Dedup por fingerprint (status|title|tech|body_hash) ─
+      # Un mismo LB/WAF puede responder en N puertos con la misma app:
+      # registramos en DB pero sólo lanzamos análisis para el primer puerto
+      # de cada bucket de fingerprint.
+      local BUCKET="${HTTP_STATUS}|${TITLE}|${TECH}|${BODY_HASH}"
+      local IS_DUP=0
+      if [[ -n "${SEEN_BUCKETS[$BUCKET]:-}" ]]; then
+        IS_DUP=1
+        ((DUP_SERVICES++))
+        log_info "  ↳ Duplicado de ${SEEN_BUCKETS[$BUCKET]} (mismo fingerprint) — sólo registrado en DB"
+      else
+        SEEN_BUCKETS[$BUCKET]="$SERVICE_URL"
+      fi
+
       log_warn "🌐 Nuevo servicio web: $SERVICE_URL (HTTP $HTTP_STATUS) ${TITLE:+— $TITLE}"
 
       # ── Añadir a la rueda de scan ───────────────────────
@@ -284,8 +305,12 @@ PYEOF
           "$(echo "$TECH" | cut -d',' -f1)" "" "" "80" "httpx" 2>/dev/null || true
       fi
 
-      # 3. Notificar por Telegram
-      _telegram_send "🌐 *Servicio web en puerto no estándar*
+      db_add_finding "$DOMAIN_ID" "port_scan" "info" \
+        "$SERVICE_URL" "port:${PORT_NUM}" "${TITLE:-sin título}"
+
+      if [[ "$IS_DUP" == "0" ]]; then
+        # 3. Notificar por Telegram (sólo único por bucket)
+        _telegram_send "🌐 *Servicio web en puerto no estándar*
 🎯 \`${SUB}\`
 🔗 \`${SERVICE_URL}\`
 🔌 Puerto: \`${PORT_NUM}\`
@@ -294,11 +319,9 @@ ${TITLE:+📄 Título: ${TITLE}}
 ${TECH:+🛠️ Tech: ${TECH}}
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 
-      db_add_finding "$DOMAIN_ID" "port_scan" "info" \
-        "$SERVICE_URL" "port:${PORT_NUM}" "${TITLE:-sin título}"
-
-      # Acumular para análisis posterior
-      echo "$SERVICE_URL" >> "$NEW_SERVICE_URLS"
+        # 4. Acumular para análisis posterior (sólo único por bucket)
+        echo "$SERVICE_URL" >> "$NEW_SERVICE_URLS"
+      fi
     fi
 
   done < "$HTTPX_OUT"
@@ -311,20 +334,33 @@ ${TECH:+🛠️ Tech: ${TECH}}
   rm -f "$IP_MAP" "$IP_LIST" "$MASSCAN_OUT" "$OPEN_PORTS" "$HTTPX_TARGETS" "$HTTPX_OUT"
 
   if [[ "$NEW_SERVICES" -gt 0 ]]; then
+    local UNIQ_SERVICES=$((NEW_SERVICES - DUP_SERVICES))
     _telegram_send "🔌 *Port Scan — Resumen*
 🌐 \`${DOMAIN}\`
-🆕 Nuevos servicios web: ${NEW_SERVICES}
+🆕 Nuevos servicios web: ${NEW_SERVICES} (${UNIQ_SERVICES} únicos, ${DUP_SERVICES} dup. fingerprint)
 📅 $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
 
     # ── Análisis automático de cada servicio encontrado ──────
     # Módulos seleccionados: crawl, JS, params, smart scan,
     # business logic, CORS, 403 bypass, CMS, path confusion, API auth
     local ANALYSIS_MODULES="05,09,11,15,20,21,22,23,25,26,29"
+    local MAX_PORT_PARALLEL="${MAX_PORT_PARALLEL:-2}"
 
-    log_info "Lanzando análisis sobre $NEW_SERVICES servicios en puertos alternativos..."
+    log_info "Lanzando análisis sobre $UNIQ_SERVICES servicios únicos (max $MAX_PORT_PARALLEL paralelo, $DUP_SERVICES duplicados saltados)..."
 
+    local port_pids=()
     while IFS= read -r SVC_URL; do
       [[ -z "$SVC_URL" ]] && continue
+
+      # Throttle: esperar slot libre antes de lanzar el siguiente
+      while [[ ${#port_pids[@]} -ge $MAX_PORT_PARALLEL ]]; do
+        local new_pids=()
+        for pid in "${port_pids[@]}"; do
+          kill -0 "$pid" 2>/dev/null && new_pids+=("$pid")
+        done
+        port_pids=("${new_pids[@]}")
+        [[ ${#port_pids[@]} -ge $MAX_PORT_PARALLEL ]] && sleep 5
+      done
 
       # hostname:port como target (httpx y curl lo manejan bien)
       local SVC_TARGET
@@ -337,6 +373,7 @@ ${TECH:+🛠️ Tech: ${TECH}}
         "--target=${SVC_TARGET}" \
         "--modules=${ANALYSIS_MODULES}" \
         >> "$SVC_LOG" 2>&1 &
+      port_pids+=($!)
 
     done < "$NEW_SERVICE_URLS"
 
@@ -344,5 +381,5 @@ ${TECH:+🛠️ Tech: ${TECH}}
   fi
 
   rm -f "$NEW_SERVICE_URLS"
-  log_ok "$MODULE_DESC completado: $NEW_SERVICES nuevos servicios web en puertos alternativos"
+  log_ok "$MODULE_DESC completado: $NEW_SERVICES nuevos (${DUP_SERVICES} duplicados de fingerprint) en puertos alternativos"
 }

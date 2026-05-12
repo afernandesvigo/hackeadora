@@ -280,10 +280,26 @@ module_run() {
   log_info "Usando ${RACE_WORKERS:-15} workers por test (barrier sync)"
 
   local FOUND=0
+  declare -A _RACE_HOST_CATCHALL=()
 
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
     http_should_skip "$URL" 2>/dev/null && continue
+
+    # Generali fix 2026-05-11: skip SPA catch-all hosts (race FP storm sobre Angular)
+    local _RC_HOST
+    _RC_HOST=$(echo "$URL" | grep -oP '^https?://[^/]+')
+    if [[ -n "$_RC_HOST" ]]; then
+      if [[ -z "${_RACE_HOST_CATCHALL[$_RC_HOST]:-}" ]]; then
+        if type is_catchall_host &>/dev/null && is_catchall_host "$_RC_HOST" 2>/dev/null; then
+          _RACE_HOST_CATCHALL[$_RC_HOST]="yes"
+          log_info "  Skipping race tests on $_RC_HOST — SPA catch-all (Bug #11ext)"
+        else
+          _RACE_HOST_CATCHALL[$_RC_HOST]="no"
+        fi
+      fi
+      [[ "${_RACE_HOST_CATCHALL[$_RC_HOST]}" == "yes" ]] && continue
+    fi
 
     # Inferir label y body según la URL
     local LABEL="generic" BODY="test=1"

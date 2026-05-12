@@ -416,8 +416,26 @@ _test_role_entity() {
   ALL_ROLE_URLS=$(echo -e "$ROLE_URLS\n$ADMIN_URLS" | sort -u \
     | grep -ivP '/(auth|login|signin|sign_in|logout)(/|$|\?)' || true)
 
+  declare -A _BL_HOST_CATCHALL=()
+
   while IFS= read -r URL; do
     [[ -z "$URL" ]] && continue
+
+    # Generali fix 2026-05-11 (Bug #20): skip SPA catch-all hosts donde
+    # cualquier /admin* devuelve la home (FP storm de "Endpoint admin HTTP 200")
+    local _BL_HOST
+    _BL_HOST=$(echo "$URL" | grep -oP '^https?://[^/]+')
+    if [[ -n "$_BL_HOST" ]]; then
+      if [[ -z "${_BL_HOST_CATCHALL[$_BL_HOST]:-}" ]]; then
+        if type is_catchall_host &>/dev/null && is_catchall_host "$_BL_HOST" 2>/dev/null; then
+          _BL_HOST_CATCHALL[$_BL_HOST]="yes"
+          log_info "  Skipping admin checks on $_BL_HOST — SPA catch-all (Bug #20)"
+        else
+          _BL_HOST_CATCHALL[$_BL_HOST]="no"
+        fi
+      fi
+      [[ "${_BL_HOST_CATCHALL[$_BL_HOST]}" == "yes" ]] && continue
+    fi
 
     local RESPONSE HTTP_STATUS BODY EFFECTIVE_URL
     RESPONSE=$(curl -sL --max-time 8 "$URL" \

@@ -413,6 +413,7 @@ module_run() {
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
   source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
   local CURL_PROXY=""
   $PROXY_ACTIVE && CURL_PROXY="--proxy ${PROXY_URL}"
@@ -438,6 +439,13 @@ module_run() {
     [[ -z "$SUB" ]] && continue
     ((CHECKED++))
     local BASE="https://${SUB}"
+
+    # Generali fix 2026-05-11 (Bug #18): SPA catch-all genera WCD FP storm
+    # (302 a /login + cache-control:public en path con ;X.css). Skip.
+    if type is_catchall_host &>/dev/null && is_catchall_host "$BASE" 2>/dev/null; then
+      log_info "  [$CHECKED] $SUB — SPA catch-all, saltando WCD/WCP (Bug #18)"
+      continue
+    fi
 
     # ── Detectar si hay caché activa ──────────────────────
     local CDN_TYPE

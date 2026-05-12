@@ -426,18 +426,38 @@ module_run() {
   local JS_LIST="$OUT_DIR/.js_list.txt"
   > "$JS_LIST"
 
+  # Generali fix 2026-05-11: detect single-target mode para filtrar por hostname
+  # y evitar reprocesar 2125 JS de www.generali.fr cuando el target es otro sub.
+  local _JS_SINGLE_SUB=""
+  local _JS_ALIVE_FILE="$OUT_DIR/subs_alive.txt"
+  if [[ -s "$_JS_ALIVE_FILE" && "$(wc -l < "$_JS_ALIVE_FILE" | tr -d ' ')" == "1" ]]; then
+    _JS_SINGLE_SUB=$(head -1 "$_JS_ALIVE_FILE" | tr -d '[:space:]')
+  fi
+
   # 1. JS en las URLs crawleadas por módulo 05
   if [[ -s "$URLS_RAW" ]]; then
     grep -iP '\.js(\?[^"]*)?$' "$URLS_RAW" >> "$JS_LIST" 2>/dev/null || true
   fi
 
   # 2. JS en la DB (otros módulos pueden haberlos añadido)
-  sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
-    "SELECT DISTINCT url FROM urls
-     WHERE domain_id=${DOMAIN_ID}
-       AND url GLOB '*.js'
-        OR (domain_id=${DOMAIN_ID} AND url GLOB '*.js?*');" \
-    2>/dev/null >> "$JS_LIST" || true
+  if [[ -n "$_JS_SINGLE_SUB" ]]; then
+    # Single-target: filtrar por hostname para no procesar JS de otros subs
+    sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
+      "SELECT DISTINCT url FROM urls
+       WHERE domain_id=${DOMAIN_ID}
+         AND (url GLOB 'http*://${_JS_SINGLE_SUB}/*.js'
+           OR url GLOB 'http*://${_JS_SINGLE_SUB}/*.js?*'
+           OR url GLOB 'http*://${_JS_SINGLE_SUB}:*/*.js'
+           OR url GLOB 'http*://${_JS_SINGLE_SUB}:*/*.js?*');" \
+      2>/dev/null >> "$JS_LIST" || true
+  else
+    sqlite3 -init "$_SQLITE_INIT" "$DB_PATH" \
+      "SELECT DISTINCT url FROM urls
+       WHERE domain_id=${DOMAIN_ID}
+         AND url GLOB '*.js'
+          OR (domain_id=${DOMAIN_ID} AND url GLOB '*.js?*');" \
+      2>/dev/null >> "$JS_LIST" || true
+  fi
 
   sort -u "$JS_LIST" -o "$JS_LIST"
 

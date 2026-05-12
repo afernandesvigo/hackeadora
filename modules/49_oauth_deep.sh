@@ -184,9 +184,27 @@ module_run() {
   [[ -z "$AUTH_URLS" ]] && { log_info "  Sin endpoints OAuth /authorize candidatos"; return 0; }
 
   local TOTAL=0
+  declare -A _OD_HOST_CATCHALL=()
   while IFS= read -r AUTH_URL; do
     [[ -z "$AUTH_URL" ]] && continue
     AUTH_URL="${AUTH_URL%%\?*}"
+
+    # Generali fix 2026-05-11 (Bug #8 ext): si host es SPA catch-all,
+    # /authorize devuelve 302→login indiferente al state — todo es FP. Skip host.
+    local _OD_HOST
+    _OD_HOST=$(echo "$AUTH_URL" | grep -oP '^https?://[^/]+')
+    if [[ -n "$_OD_HOST" ]]; then
+      if [[ -z "${_OD_HOST_CATCHALL[$_OD_HOST]:-}" ]]; then
+        if type is_catchall_host &>/dev/null && is_catchall_host "$_OD_HOST" 2>/dev/null; then
+          _OD_HOST_CATCHALL[$_OD_HOST]="yes"
+          log_info "  Skipping OAuth tests on $_OD_HOST — SPA catch-all (Bug #8 ext)"
+        else
+          _OD_HOST_CATCHALL[$_OD_HOST]="no"
+        fi
+      fi
+      [[ "${_OD_HOST_CATCHALL[$_OD_HOST]}" == "yes" ]] && continue
+    fi
+
     local CLIENT_ID
     CLIENT_ID=$(sqlite3 "$DB_PATH" "SELECT url FROM urls WHERE url LIKE '%client_id=%' AND domain_id=${DOMAIN_ID} LIMIT 1;" 2>/dev/null | grep -oP '(?<=client_id=)[^&]+' | head -1)
     [[ -z "$CLIENT_ID" ]] && CLIENT_ID="hackeadora_test_client"

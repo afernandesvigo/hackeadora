@@ -335,6 +335,8 @@ module_run() {
   > "$PARAMS_OUT"
 
   source "${SCRIPT_DIR}/core/proxy.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/http_analyzer.sh" 2>/dev/null || true
+  source "${SCRIPT_DIR}/core/finding_validators.sh" 2>/dev/null || true
   proxy_check
 
   local ARJUN_PROXY=""
@@ -345,6 +347,15 @@ module_run() {
   local SINGLE_SUB=""
   if [[ -s "$ALIVE" && "$(wc -l < "$ALIVE" | tr -d ' ')" == "1" ]]; then
     SINGLE_SUB=$(head -1 "$ALIVE" | tr -d '[:space:]')
+  fi
+
+  # Generali fix 2026-05-11: si single-target es SPA catch-all, skip todo el módulo
+  # (cualquier path devuelve el mismo HTML 434KB, fuzzing sólo genera FPs).
+  if [[ -n "$SINGLE_SUB" ]] && type is_catchall_host &>/dev/null; then
+    if is_catchall_host "https://${SINGLE_SUB}" 2>/dev/null; then
+      log_info "Target ${SINGLE_SUB} es SPA catch-all — saltando param discovery (Bug #15ext)"
+      return 0
+    fi
   fi
 
   # ── 1. ParamSpider — histórico de Wayback/CommonCrawl ────────
@@ -399,16 +410,35 @@ module_run() {
   # ── 2. Todas las URLs con params acumuladas en DB ────────────
   # Lee de la tabla urls (katana + js_analyzer + auth_crawler + asn + etc.)
   # para garantizar que ningún módulo previo se quede sin procesar sus params.
-  sqlite3 "$DB_PATH" \
-    "SELECT url FROM urls
-     WHERE domain_id=${DOMAIN_ID} AND url LIKE '%?%';" \
-    2>/dev/null >> "$PARAMS_OUT" || true
+  # Generali fix 2026-05-11: en single-target mode filtrar por hostname,
+  # si no la DB devuelve 23K URLs de www.generali.fr cuando el target es otro sub.
+  if [[ -n "$SINGLE_SUB" ]]; then
+    sqlite3 "$DB_PATH" \
+      "SELECT url FROM urls
+       WHERE domain_id=${DOMAIN_ID}
+         AND url LIKE '%?%'
+         AND (url GLOB 'http*://${SINGLE_SUB}/*'
+           OR url GLOB 'http*://${SINGLE_SUB}:*');" \
+      2>/dev/null >> "$PARAMS_OUT" || true
+  else
+    sqlite3 "$DB_PATH" \
+      "SELECT url FROM urls
+       WHERE domain_id=${DOMAIN_ID} AND url LIKE '%?%';" \
+      2>/dev/null >> "$PARAMS_OUT" || true
+  fi
 
   # También del fichero urls_raw.txt por si la DB tuviera lag de escritura
   if [[ -s "$URLS_RAW" ]]; then
-    grep -P '\?' "$URLS_RAW" \
-      | grep -iP "^https?://([a-z0-9_-]+\.)*${DOMAIN_RE}([/:#?]|$)" \
-      >> "$PARAMS_OUT" 2>/dev/null || true
+    if [[ -n "$SINGLE_SUB" ]]; then
+      local SINGLE_SUB_RE="${SINGLE_SUB//./\\.}"
+      grep -P '\?' "$URLS_RAW" \
+        | grep -iP "^https?://${SINGLE_SUB_RE}([/:#?]|$)" \
+        >> "$PARAMS_OUT" 2>/dev/null || true
+    else
+      grep -P '\?' "$URLS_RAW" \
+        | grep -iP "^https?://([a-z0-9_-]+\.)*${DOMAIN_RE}([/:#?]|$)" \
+        >> "$PARAMS_OUT" 2>/dev/null || true
+    fi
   fi
 
   sort -u "$PARAMS_OUT" -o "$PARAMS_OUT"
